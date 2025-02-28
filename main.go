@@ -1,6 +1,7 @@
 package main
 
 import (
+	"HalalMate/config/database"
 	v1 "HalalMate/routes/v1"
 	"log"
 	"os"
@@ -13,6 +14,13 @@ import (
 )
 
 func main() {
+
+
+	//firebase init
+	database.InitFirebase()
+
+
+	// Load environment variables
 
 	err := godotenv.Load()
 	if err != nil {

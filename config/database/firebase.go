@@ -18,7 +18,7 @@ var AuthClient       *auth.Client
 func InitFirebase() {
 	ctx := context.Background()
 	// Initialize Firestore client
-	firestoreOpt := option.WithCredentialsFile("bakulendatabase-firebase-adminsdk-fbsvc-c5d1d48f7d.json")
+	firestoreOpt := option.WithCredentialsFile("halalmate-db-firebase-adminsdk-fbsvc-e090138059.json")
 	app, err := firebase.NewApp(ctx, nil, firestoreOpt)
 	if err != nil {
 		log.Fatalf("Failed to initialize Firebase Firestore: %v", err)

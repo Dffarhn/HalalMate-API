@@ -45,7 +45,7 @@ func (h *ScrapController) GetAllScrapePlaces(c *gin.Context) {
 	latitude := fmt.Sprintf("%.7f", req.Latitude)
 	longitude := fmt.Sprintf("%.7f", req.Longitude)
 
-	url := fmt.Sprintf("https://www.google.com/maps/search/%s/@%s,%s,18.5z/data=!4m2!2m1!6e5?hl=id", formattedKeyword, latitude, longitude)
+	url := fmt.Sprintf("https://www.google.com/maps/search/%s/@%s,%s,18.5z", formattedKeyword, latitude, longitude)
 
 	log.Println("Scraping URL:", url)
 
