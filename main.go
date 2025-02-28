@@ -7,11 +7,18 @@ import (
 	"time"
 
 	"github.com/gin-contrib/cors"
+	"github.com/joho/godotenv"
 
 	"github.com/gin-gonic/gin"
 )
 
 func main() {
+
+	err := godotenv.Load()
+	if err != nil {
+		log.Println("⚠️  No .env file found, using default values")
+	}
+
 
 	// Setup Gin router
 	r := gin.Default()
@@ -29,7 +36,6 @@ func main() {
 	// Register all routes
 	v1.RegisterRoutes(r)
 
-
 	log.Println("🚀 Server running on http://localhost:8080")
 	r.Run(":8080")
 
@@ -41,3 +47,4 @@ func main() {
 	log.Println("Server running on port", port)
 	r.Run(":" + port)
 }
+

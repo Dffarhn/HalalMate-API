@@ -20,7 +20,7 @@ type ScrapController struct {
 // NewAuthHandler initializes AuthHandler
 func NewScrapController() *ScrapController {
 	return &ScrapController{
-		ScrapService: services.NewScrapService(),
+		ScrapService: services.NewScrapService(services.NewOpenAIService()),
 	}
 }
 
@@ -60,7 +60,7 @@ func (h *ScrapController) GetAllScrapePlaces(c *gin.Context) {
 	doneChan := make(chan bool)
 
 	// Start scraping in a separate goroutine
-	go services.ScrapePlaces([]string{url}, placeChan, doneChan)
+	go h.ScrapService.ScrapePlaces([]string{url}, placeChan, doneChan)
 
 	// Stream results via SSE
 	for {
