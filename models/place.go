@@ -28,5 +28,5 @@ type MenuItem struct {
 
 type MenuList struct {
 	Name  string `json:"name"`
-	Price string `json:"price"`
+	Price int64 `json:"price"`
 }

@@ -2,6 +2,7 @@ package services
 
 import (
 	"HalalMate/config/database"
+	"HalalMate/config/environment"
 	"HalalMate/utils"
 	"context"
 	"crypto/rand"
@@ -127,7 +128,7 @@ func (s *AuthService) Login(email string, password string) (string, error) {
 
 func (s *AuthService) VerifyGoogleIDToken(idToken string) (string, error) {
 	ctx := context.Background()
-	audience := "232341066470-kbpl26tstrov8g6rfsve9ml5babebslo.apps.googleusercontent.com"
+	audience := environment.GetWebClientId()
 
 	// ✅ Validate Google ID Token
 	payload, err := idtoken.Validate(ctx, idToken, audience)
