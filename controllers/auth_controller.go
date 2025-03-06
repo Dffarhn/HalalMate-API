@@ -28,10 +28,10 @@ func NewAuthController() *AuthController {
 // RegisterUser handles user registration
 func (h *AuthController) RegisterUser(c *gin.Context) {
 	var req struct {
-		Username        string `json:"username"`
-		Email           string `json:"email"`
-		Password        string `json:"password"`
-		RetypedPassword string `json:"retyped_password"`
+		Username        string `json:"username" binding:"required"`
+		Email           string `json:"email" binding:"required"`
+		Password        string `json:"password" binding:"required"`
+		RetypedPassword string `json:"retyped_password" binding:"required"`
 		FCMToken        string `json:"fcm_token"`
 	}
 

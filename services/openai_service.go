@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -162,4 +163,38 @@ func cleanJSONResponse(response string) string {
 
 	// Trim unnecessary whitespace
 	return strings.TrimSpace(cleaned)
+}
+
+// ChatStream sends a request to OpenAI's API and returns a streaming response
+func (s *OpenAIService) ChatStream(ctx context.Context, systemPrompt string, userPrompt string) (io.ReadCloser, error) {
+	url := "https://api.openai.com/v1/chat/completions"
+	payload := map[string]interface{}{
+		"model": "gpt-4o",
+		"messages": []map[string]interface{}{
+			{"role": "system", "content": systemPrompt},
+			{"role": "user", "content": userPrompt},
+		},
+		"stream": true, // Enable streaming mode
+	}
+
+	jsonData, _ := json.Marshal(payload)
+	req, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	req.Header.Set("Authorization", "Bearer "+s.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("error sending request: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		log.Println("OpenAI API error response:", string(body))
+		return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Return the response stream (caller must close it)
+	return resp.Body, nil
 }

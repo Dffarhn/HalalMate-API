@@ -21,16 +21,16 @@ import (
 )
 
 type ScrapService struct {
-	FirestoreClient *firestore.Client
-	OpenAIService   *OpenAIService
+	FirestoreClient   *firestore.Client
+	OpenAIService     *OpenAIService
 	RestaurantService *RestaurantService
 }
 
 // NewScrapService initializes ScrapService with Firestore and OpenAI service
 func NewScrapService(openAIService *OpenAIService) *ScrapService {
 	return &ScrapService{
-		FirestoreClient: database.GetFirestoreClient(),
-		OpenAIService:   openAIService,
+		FirestoreClient:   database.GetFirestoreClient(),
+		OpenAIService:     openAIService,
 		RestaurantService: NewRestaurantService(),
 	}
 }
@@ -52,6 +52,10 @@ func (s *ScrapService) ScrapePlaces(searchURLs []string, placeChan chan<- models
 			sem := make(chan struct{}, 5) // Limit to 5 concurrent menu scraping goroutines
 
 			maxPlaces := 20
+
+			if len(places) < maxPlaces {
+				maxPlaces = len(places) // Prevent out-of-range index
+			}
 
 			for i := 0; i < maxPlaces; i++ { // Limit to maxPlaces
 				menuWg.Add(1)
@@ -181,45 +185,6 @@ func scrapeData(pageURL string) []models.Place {
 	return extractData(pageHTML)
 }
 
-// func scrapeData(pageURL string) []models.Place {
-// 	ctx, cancel := chromedp.NewContext(context.Background())
-// 	defer cancel()
-
-// 	ctx, cancel = context.WithTimeout(ctx, 60*time.Second)
-// 	defer cancel()
-
-// 	searchQuery := extractSearchQuery(pageURL)
-// 	if searchQuery == "" {
-// 		log.Println("Failed to extract search query from URL")
-// 		return nil
-// 	}
-
-// 	var pageHTML string
-// 	log.Printf("Navigating to page: %s\n", pageURL)
-// 	err := chromedp.Run(ctx,
-
-// 		chromedp.ActionFunc(func(ctx context.Context) error {
-// 			return emulation.SetGeolocationOverride().
-// 				WithLatitude(3.1127).
-// 				WithLongitude(101.5501).
-// 				WithAccuracy(1).
-// 				Do(ctx)
-//         }),
-// 		chromedp.Navigate(pageURL),
-// 		chromedp.Sleep(2*time.Second),
-// 		chromedp.WaitVisible(`[aria-label="Hasil untuk `+searchQuery+`"]`, chromedp.ByQuery),
-// 		scrollMultipleTimes(5, searchQuery),
-// 		chromedp.OuterHTML("body", &pageHTML),
-// 	)
-// 	if err != nil {
-// 		log.Printf("Failed to load page %s: %v\n", pageURL, err)
-// 		return nil
-// 	}
-
-// 	log.Println("Extracting data from page...")
-// 	return extractData(pageHTML)
-// }
-
 func (s *ScrapService) scrapeDataMenu(pageURL string) ([]string, string, error) {
 	ctx, cancel := chromedp.NewContext(context.Background())
 	defer cancel()
@@ -285,45 +250,21 @@ func (s *ScrapService) scrapeDataMenu(pageURL string) ([]string, string, error) 
 			}
 			return nil
 		}),
-		
-
-		// Extract menu images if found
-		// chromedp.ActionFunc(func(ctx context.Context) error {
-		// 	// Wait for images to load before checking
-		// 	err := chromedp.WaitVisible("div.U39Pmb div.Uf0tqf.loaded", chromedp.ByQuery).Do(ctx)
-		// 	if err != nil {
-		// 		log.Println("⚠️ No menu images found (WaitVisible failed).")
-		// 		return nil // Avoid stopping execution
-		// 	}
-
-		// 	var exists bool
-		// 	if err := chromedp.Evaluate(`document.querySelector('div.U39Pmb div.Uf0tqf') !== null`, &exists).Do(ctx); err != nil {
-		// 		return err
-		// 	}
-
-		// 	if exists {
-		// 		return chromedp.AttributesAll("div.U39Pmb div.Uf0tqf", &imageElements, chromedp.ByQueryAll).Do(ctx)
-		// 	}
-
-		// 	log.Println("⚠️ No menu images found.")
-		// 	return nil
-		// }),
 
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			var imageURLs []string
 			err := chromedp.Evaluate(`Array.from(document.querySelectorAll('div.Uf0tqf.loaded'))
 				.map(el => el.style.backgroundImage.replace(/url\(["']?(.*?)["']?\)/, '$1'))`, &imageURLs).Do(ctx)
-		
+
 			if err != nil {
 				log.Println("⚠️ Failed to extract menu images:", err)
 				return nil
 			}
-			
+
 			log.Printf("📸 Found %d menu images.\n", len(imageURLs))
 			imageMenuList = imageURLs
 			return nil
 		}),
-		
 	)
 
 	if err != nil {
@@ -453,22 +394,6 @@ func extractSearchQuery(pageURL string) string {
 	return strings.ReplaceAll(queryPart, "+", " ")      // Convert to readable format
 }
 
-// func extractImageURLs(elements []map[string]string) []string {
-// 	re := regexp.MustCompile(`url\(["']?(.*?)["']?\)`) // Extract URLs from "style" attributes
-// 	var urls []string
-// 	for _, elem := range elements {
-// 		if style, ok := elem["style"]; ok {
-// 			if match := re.FindStringSubmatch(style); len(match) > 1 {
-// 				url := match[1]
-// 				if url != "//:0" { // Exclude "//:0"
-// 					urls = append(urls, url)
-// 				}
-// 			}
-// 		}
-// 	}
-// 	return urls
-// }
-
 func extractReviewTexts(nodes []*cdp.Node) []string {
 	var reviews []string
 	for _, node := range nodes {
@@ -492,28 +417,6 @@ func scrollMultipleTimes(times int, searchQuery string) chromedp.Tasks {
 	}
 	return tasks
 }
-
-// func scrollReviews(times int) chromedp.Tasks {
-// 	tasks := chromedp.Tasks{}
-// 	for i := 0; i < times; i++ {
-// 		tasks = append(tasks,
-// 			chromedp.ScrollIntoView(`div.m6QErb.XiKgde div.jftiEf.fontBodyMedium div.MyEned span.wiI7pd`, chromedp.ByQuery),
-// 			chromedp.Sleep(2*time.Second),
-// 		)
-// 	}
-// 	return tasks
-// }
-
-// func scrollPhotoMenu(times int) chromedp.Tasks {
-// 	tasks := chromedp.Tasks{}
-// 	for i := 0; i < times; i++ {
-// 		tasks = append(tasks,
-// 			chromedp.Evaluate(`document.querySelector('div.m6QErb.DxyBCb.kA9KIf.dS8AEf.XiKgde div.m6QErb.XiKgde').scrollBy(0, 500);`, nil),
-// 			chromedp.Sleep(500*time.Millisecond),
-// 		)
-// 	}
-// 	return tasks
-// }
 
 func extractLatLong(url string) (float64, float64, error) {
 	re := regexp.MustCompile(`3d(-?\d+\.\d+)!4d(-?\d+\.\d+)`)
