@@ -12,13 +12,11 @@ type RoomController struct {
 	RoomService *services.RoomService
 }
 
-
 func NewRoomController() *RoomController {
 	return &RoomController{
 		RoomService: services.NewRoomService(),
 	}
 }
-
 
 // made room chat
 
@@ -30,7 +28,19 @@ func (c *RoomController) CreateRoom(ctx *gin.Context) {
 		return
 	}
 
-	room, err := c.RoomService.SaveRoom(ctx, userId.(string))
+	// Extract title from request body
+	var requestBody struct {
+		Title string `json:"title" binding:"required"`
+	}
+
+	if err := ctx.ShouldBindJSON(&requestBody); err != nil {
+		utils.ErrorResponse(ctx, http.StatusBadRequest, "Title is required")
+		return
+	}
+
+	title := requestBody.Title
+
+	room, err := c.RoomService.SaveRoom(ctx, userId.(string), title)
 
 	if err != nil {
 		utils.ErrorResponse(ctx, http.StatusInternalServerError, "Failed to create room chat")
@@ -62,4 +72,28 @@ func (c *RoomController) GetAllRoom(ctx *gin.Context) {
 	utils.SuccessResponse(ctx, http.StatusOK, "Rooms fetched successfully", rooms)
 }
 
+func (c *RoomController) GetSpesificRoom(ctx *gin.Context) {
+	// Ambil userId dari middleware (disimpan di context)
+	userId, exists := ctx.Get("userId")
+	if !exists {
+		utils.ErrorResponse(ctx, http.StatusUnauthorized, "UserId is required")
+		return
+	}
 
+	// Ambil roomId dari URL params
+	roomId := ctx.Param("roomId")
+	if roomId == "" {
+		utils.ErrorResponse(ctx, http.StatusBadRequest, "roomId parameter is required")
+		return
+	}
+
+	// Panggil service dengan Firestore-compatible context
+	roomWithChat, err := c.RoomService.GetRoomByID(ctx.Request.Context(), userId.(string), roomId)
+	if err != nil {
+		utils.ErrorResponse(ctx, http.StatusInternalServerError, "Failed to get room: "+err.Error())
+		return
+	}
+
+	// Response sukses
+	utils.SuccessResponse(ctx, http.StatusOK, "Room fetched successfully", roomWithChat)
+}

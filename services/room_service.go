@@ -10,7 +10,7 @@ import (
 )
 
 type RoomService struct {
-	FirestoreClient   *firestore.Client
+	FirestoreClient *firestore.Client
 }
 
 func NewRoomService() *RoomService {
@@ -19,10 +19,9 @@ func NewRoomService() *RoomService {
 	}
 }
 
-
 //save room into firebase
 
-func (s *RoomService) SaveRoom(ctx context.Context, userId string) (*models.Room, error) {
+func (s *RoomService) SaveRoom(ctx context.Context, userId string, title string) (*models.Room, error) {
 
 	var room models.Room
 	// Buat dokumen baru di Firestore (Firestore akan otomatis generate ID)
@@ -32,6 +31,8 @@ func (s *RoomService) SaveRoom(ctx context.Context, userId string) (*models.Room
 	room.CreatedAt = time.Now().Format(time.RFC3339) // Format waktu standar
 
 	room.UserID = userId
+
+	room.RoomTitle = title
 
 	// Simpan data ke Firestore
 	_, err := roomRef.Set(ctx, room)
@@ -43,10 +44,10 @@ func (s *RoomService) SaveRoom(ctx context.Context, userId string) (*models.Room
 	return &models.Room{
 		RoomID:    roomRef.ID, // Firestore-generated ID
 		UserID:    room.UserID,
+		RoomTitle: room.RoomTitle,
 		CreatedAt: room.CreatedAt,
 	}, nil
 }
-
 
 //get all room chat
 
@@ -79,10 +80,9 @@ func (s *RoomService) GetRooms(ctx context.Context, userId string) ([]*models.Ro
 	return rooms, nil
 }
 
-
 //get room by id
 
-func (s *RoomService) GetRoomByID(ctx context.Context, userId, roomId string) (*models.Room, error) {
+func (s *RoomService) GetRoomByID(ctx context.Context, userId, roomId string) (*models.RoomWithChat, error) {
 	// Query room document
 	roomDoc, err := s.FirestoreClient.Collection("users").Doc(userId).Collection("rooms").Doc(roomId).Get(ctx)
 	if err != nil {
@@ -95,5 +95,25 @@ func (s *RoomService) GetRoomByID(ctx context.Context, userId, roomId string) (*
 		return nil, err
 	}
 
-	return &room, nil
+	// Query chats collection in the room
+	chatsSnapshot, err := s.FirestoreClient.Collection("users").Doc(userId).Collection("rooms").Doc(roomId).Collection("chats").OrderBy("CreatedAt", firestore.Asc).Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert chat documents to Chat structs
+	var chats []models.Chat
+	for _, chatDoc := range chatsSnapshot {
+		var chat models.Chat
+		if err := chatDoc.DataTo(&chat); err != nil {
+			return nil, err
+		}
+		chats = append(chats, chat)
+	}
+
+	// Return room with chats
+	return &models.RoomWithChat{
+		Room:  room,
+		Chats: chats,
+	}, nil
 }

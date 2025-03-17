@@ -16,6 +16,7 @@ import (
 
 type ChatService struct {
 	RestaurantService *RestaurantService
+	RoomService       *RoomService
 	OpenAIService     *OpenAIService
 	FirestoreClient   *firestore.Client
 }
@@ -24,6 +25,7 @@ type ChatService struct {
 func NewChatService() *ChatService {
 	return &ChatService{
 		RestaurantService: NewRestaurantService(),
+		RoomService:       NewRoomService(),
 		OpenAIService:     NewOpenAIService(),
 		FirestoreClient:   database.GetFirestoreClient(),
 	}
@@ -37,16 +39,38 @@ func (s *ChatService) StreamRecommendations(
 	doneChan chan<- bool,
 	location models.GeoLocation,
 	prompt string,
+	userId string,
+	roomId string,
 ) {
 	defer close(recommendationChan)
 	defer close(doneChan)
 
 	// Fetch nearby restaurants
-	restaurants, err := s.RestaurantService.GetRestaurantByLocation(ctx, location.Latitude, location.Longitude)
+	restaurants, err := s.RestaurantService.GetAllRestaurantByLocation(ctx, location.Latitude, location.Longitude)
 	if err != nil {
 		log.Println("Error fetching restaurants:", err)
 		doneChan <- true
 		return
+	}
+
+	//get history chat before
+
+	rooms, err := s.RoomService.GetRoomByID(ctx, userId, roomId)
+
+	if err != nil {
+		log.Println("Error fetching chats:", err)
+		doneChan <- true
+		return
+	}
+
+	// Format chat history
+	var chatHistory strings.Builder
+
+	for _, chat := range rooms.Chats {
+		chatHistory.WriteString(fmt.Sprintf(
+			"**User %s** (%s):\n%s\n\n",
+			chat.UserID, chat.CreatedAt, chat.Chat,
+		))
 	}
 
 	// Convert restaurant data to JSON
@@ -60,33 +84,33 @@ func (s *ChatService) StreamRecommendations(
 	// System prompt for AI
 	systemPrompt := fmt.Sprintf(
 		"Generate restaurant recommendations based on the user's request using the provided restaurant data.\n\n"+
-		"### ⚡ Guidelines:\n"+
-		"- You are free to generate descriptive and engaging recommendations, but **any data retrieved from the database must be formatted in a markdown-like block**.\n"+
-		"- If a specific detail (e.g., menu, distance) **is missing in the database, do not guess or fabricate it**—simply omit it.\n"+
-		"- Ensure that responses remain **concise, structured, and within the given data limits**.\n\n"+
-		"###  Recommended Restaurants:\n\n"+
-		"%s\n\n"+
-		"### Formatting Rules for Database Data:\n"+
-		"- **Wrap all database-sourced restaurant details** inside a markdown-like fenced block:\n"+
-		"  ```md\n"+
-		"  **Name**: {{name}}\n"+
-		"  **ID**: {{id}}\n"+
-		"  **Distance**: {{distance}} km\n"+
-		"  **Menu Highlights**: {{menu}}\n"+
-		"  ```\n"+
-		"- Feel free to add context or suggestions outside this block to make the response more engaging.\n"+
-		"- Example output:\n"+
-		"  *Looking for the best sushi spot? Try this one!*\n\n"+
-		"  ```md\n"+
-		"  **Name**: Sushi Go\n"+
-		"  **ID**: 12345\n"+
-		"  **Distance**: 2.4 km\n"+
-		"  **Menu Highlights**: Salmon Sashimi, Tuna Roll\n"+
-		"  ```\n\n"+
-		" **Reminder**: Do **not** exceed the provided data limits, and avoid making assumptions about missing details.",
+			"### 🗣 Chat History:\n\n%s\n\n"+
+			"### ⚡ Guidelines:\n"+
+			"- You are free to generate descriptive and engaging recommendations, but **any data retrieved from the database must be formatted in a markdown-like block**.\n"+
+			"- If a specific detail (e.g., menu, distance) **is missing in the database, do not guess or fabricate it**—simply omit it.\n"+
+			"- Ensure that responses remain **concise, structured, and within the given data limits**.\n\n"+
+			"###  Recommended Restaurants:\n\n%s\n\n"+
+			"### Formatting Rules for Database Data:\n"+
+			"- **Wrap all database-sourced restaurant details** inside a markdown-like fenced block:\n"+
+			"  ```md\n"+
+			"  **Name**: {{name}}\n"+
+			"  **ID**: {{id}}\n"+
+			"  **Distance**: {{distance}} km\n"+
+			"  **Menu Highlights**: {{menu}}\n"+
+			"  ```\n"+
+			"- Feel free to add context or suggestions outside this block to make the response more engaging.\n"+
+			"- Example output:\n"+
+			"  *Looking for the best sushi spot? Try this one!*\n\n"+
+			"  ```md\n"+
+			"  **Name**: Sushi Go\n"+
+			"  **ID**: 12345\n"+
+			"  **Distance**: 2.4 km\n"+
+			"  **Menu Highlights**: Salmon Sashimi, Tuna Roll\n"+
+			"  ```\n\n"+
+			" **Reminder**: Do **not** exceed the provided data limits, and avoid making assumptions about missing details.",
+		chatHistory.String(),
 		string(restaurantsJSON),
 	)
-	
 
 	// Start OpenAI streaming
 	stream, err := s.OpenAIService.ChatStream(ctx, systemPrompt, prompt)
@@ -184,7 +208,6 @@ func (s *ChatService) SaveRoom(ctx context.Context, userId string) (*models.Room
 		CreatedAt: room.CreatedAt,
 	}, nil
 }
-
 
 //get all room chat
 

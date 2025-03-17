@@ -14,6 +14,8 @@ func RegisterRoutes(router *gin.Engine) {
 	restaurantHandler := controllers.NewRestaurantController()
 	chatHandler := controllers.NewChatController()
 	roomHandler := controllers.NewRoomController()
+	userHandler := controllers.NewUserController()
+	bookmarkHandler := controllers.NewBookmarkController()
 
 	// Register the routes
 	v1Routes := router.Group("/v1")
@@ -23,5 +25,7 @@ func RegisterRoutes(router *gin.Engine) {
 		handlers.RegisterRestaurantRoutes(v1Routes, restaurantHandler)
 		handlers.RegisterChatRoutes(v1Routes, chatHandler)
 		handlers.RegisterRoomRoutes(v1Routes, roomHandler)
+		handlers.RegisterUserRoutes(v1Routes, userHandler)
+		handlers.RegisterBookmarkRoute(v1Routes, bookmarkHandler)
 	}
 }

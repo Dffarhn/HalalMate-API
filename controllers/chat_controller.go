@@ -91,7 +91,7 @@ func (c *ChatController) ChatRecomendation(ctx *gin.Context) {
 	}
 
 	// Start streaming recommendations in a separate goroutine
-	go c.ChatService.StreamRecommendations(ctx, recommendationChan, doneChan, location, formattedPrompt)
+	go c.ChatService.StreamRecommendations(ctx, recommendationChan, doneChan, location, formattedPrompt, userId.(string), roomId)
 
 	// Stream results via SSE
 	// Stream results via SSE
@@ -137,4 +137,3 @@ func (c *ChatController) ChatRecomendation(ctx *gin.Context) {
 	}
 
 }
-

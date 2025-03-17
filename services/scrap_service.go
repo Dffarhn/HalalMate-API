@@ -58,10 +58,25 @@ func (s *ScrapService) ScrapePlaces(searchURLs []string, placeChan chan<- models
 			}
 
 			for i := 0; i < maxPlaces; i++ { // Limit to maxPlaces
+
+				exists, err := s.RestaurantService.CheckRestaurantExists(context.Background(), places[i].Location.Latitude, places[i].Location.Longitude, places[i].Title)
+				if err != nil {
+					log.Printf("❌ Error checking restaurant existence for %s: %v\n", places[i].Title, err)
+					continue // Skip if there's an error
+				}
+				if exists {
+					log.Printf("⚠️ Skipping duplicate restaurant: %s\n", places[i].Title)
+					continue // Skip if restaurant already exists
+				}
+
 				menuWg.Add(1)
 				sem <- struct{}{} // Acquire a slot
 
 				go func(i int) {
+					//if the title and longitude and langitude same dont do this
+					//if the title and longitude and langitude same dont do this
+					//if the title and longitude and langitude same dont do this
+
 					defer menuWg.Done()
 					defer func() { <-sem }() // Release slot after completion
 
@@ -356,11 +371,13 @@ func extractData(html string) []models.Place {
 	doc.Find(".Nv2PK").Each(func(i int, s *goquery.Selection) {
 		mapsLink := s.Find("a[href]").AttrOr("href", "N/A")
 		lat, long, _ := extractLatLong(mapsLink) // Call extractLatLong only once
+		reviewCount := s.Find(".UY7F9").Text()
+		reviewCountClean := cleanReviewCount(reviewCount)
 
 		place := models.Place{
 			Title:       s.Find(".qBF1Pd").Text(),
 			Rating:      s.Find(".MW4etd").Text(),
-			ReviewCount: s.Find(".UY7F9").Text(),
+			ReviewCount: reviewCountClean,
 			Location: models.GeoLocation{
 
 				Latitude:  lat,
@@ -434,4 +451,10 @@ func extractLatLong(url string) (float64, float64, error) {
 	}
 
 	return latitude, longitude, nil
+}
+
+func cleanReviewCount(reviewText string) string {
+	re := regexp.MustCompile(`\d+\.\d+`) // Match a number like "1.297"
+	match := re.FindString(reviewText)
+	return match
 }

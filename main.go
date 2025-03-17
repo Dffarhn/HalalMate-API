@@ -2,6 +2,7 @@ package main
 
 import (
 	"HalalMate/config/database"
+	"HalalMate/middleware"
 	v1 "HalalMate/routes/v1"
 	"log"
 	"os"
@@ -15,10 +16,8 @@ import (
 
 func main() {
 
-
 	//firebase init
 	database.InitFirebase()
-
 
 	// Load environment variables
 
@@ -27,9 +26,11 @@ func main() {
 		log.Println("⚠️  No .env file found, using default values")
 	}
 
-
 	// Setup Gin router
 	r := gin.Default()
+
+	// Pasang middleware error handler
+	r.Use(middleware.ErrorHandlerMiddleware())
 
 	// CORS Middleware
 	r.Use(cors.New(cors.Config{
@@ -55,4 +56,3 @@ func main() {
 	log.Println("Server running on port", port)
 	r.Run(":" + port)
 }
-

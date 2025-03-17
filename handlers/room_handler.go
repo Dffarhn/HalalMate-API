@@ -12,6 +12,7 @@ func RegisterRoomRoutes(router *gin.RouterGroup, roomController *controllers.Roo
 	{
 		roomGroup.POST("/room", middleware.AuthMiddleware(), roomController.CreateRoom)
 		roomGroup.GET("/room", middleware.AuthMiddleware(), roomController.GetAllRoom)
+		roomGroup.GET("/room/:roomId", middleware.AuthMiddleware(), roomController.GetSpesificRoom)
 
 	}
 }

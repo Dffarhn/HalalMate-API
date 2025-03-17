@@ -41,7 +41,7 @@ func haversine(lat1, lon1, lat2, lon2 float64) float64 {
 	return earthRadiusKm * c
 }
 
-func (s *RestaurantService) GetRestaurantByLocation(ctx context.Context, latitude, longitude float64) ([]map[string]interface{}, error) {
+func (s *RestaurantService) GetAllRestaurantByLocation(ctx context.Context, latitude, longitude float64) ([]map[string]interface{}, error) {
 	// Generate geohash for the given location
 	targetGeoHash := geohash.Encode(latitude, longitude)
 
@@ -99,7 +99,7 @@ func (s *RestaurantService) GetRestaurantByLocation(ctx context.Context, latitud
 
 //get restaurant by doc id
 
-func (s *RestaurantService) GetRestaurantByID(ctx context.Context, docID string, latitude, longitude float64) (map[string]interface{}, error) {
+func (s *RestaurantService) GetRestaurantByIdAndLocation(ctx context.Context, docID string, latitude, longitude float64) (map[string]interface{}, error) {
 	doc, err := s.FirestoreClient.Collection("restaurants").Doc(docID).Get(ctx)
 	if err != nil {
 		return nil, err
@@ -121,6 +121,19 @@ func (s *RestaurantService) GetRestaurantByID(ctx context.Context, docID string,
 	distance := haversine(latitude, longitude, geoPoint.Latitude, geoPoint.Longitude)
 	doc.DataTo(&restaurant)
 	restaurant["distance"] = distance
+
+	return restaurant, nil
+}
+
+func (s *RestaurantService) GetRestaurantByID(ctx context.Context, docID string) (map[string]interface{}, error) {
+	doc, err := s.FirestoreClient.Collection("restaurants").Doc(docID).Get(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	restaurant := make(map[string]interface{})
+	doc.DataTo(&restaurant)
+	restaurant["id"] = docID
 
 	return restaurant, nil
 }
@@ -148,6 +161,7 @@ func (s *RestaurantService) SaveRestaurant(ctx context.Context, restaurant *mode
 		"menu_link":      restaurant.MenuLink,
 		"reviews":        restaurant.Reviews,
 		"menu":           restaurant.Menu,
+		"review_count":   restaurant.ReviewCount,
 	}
 
 	_, _, err := s.FirestoreClient.Collection("restaurants").Add(ctx, data)
@@ -155,4 +169,32 @@ func (s *RestaurantService) SaveRestaurant(ctx context.Context, restaurant *mode
 		return err
 	}
 	return nil
+}
+
+//function to check if restaurant exists on database by on lat and long
+
+func (s *RestaurantService) CheckRestaurantExists(ctx context.Context, latitude, longitude float64, title string) (bool, error) {
+	// Generate geohash for the given location
+	targetGeoHash := geohash.Encode(latitude, longitude)
+
+	// Get a list of nearby geohashes (small variations)
+	geohashPrefix := targetGeoHash[:5] // Use only the first 5 characters for a 3 km range
+
+	// Query Firestore using geohash prefix and title
+	iter := s.FirestoreClient.Collection("restaurants").
+		Where("geohash", ">=", geohashPrefix).
+		Where("geohash", "<=", geohashPrefix+"~").
+		Where("title", "==", title).
+		Documents(ctx)
+
+	// Get first document
+	_, err := iter.Next()
+	if err == iterator.Done {
+		return false, nil // No document found
+	}
+	if err != nil {
+		return false, err // Return error if something goes wrong
+	}
+
+	return true, nil // Restaurant exists
 }
