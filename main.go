@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/gin-contrib/cors"
-	// "github.com/joho/godotenv"
+	"github.com/joho/godotenv"
 
 	"github.com/gin-gonic/gin"
 )
@@ -21,10 +21,10 @@ func main() {
 
 	// Load environment variables
 
-	// err := godotenv.Load()
-	// if err != nil {
-	// 	log.Println("⚠️  No .env file found, using default values")
-	// }
+	err := godotenv.Load()
+	if err != nil {
+		log.Println("⚠️  No .env file found, using default values")
+	}
 
 	// Setup Gin router
 	r := gin.Default()
