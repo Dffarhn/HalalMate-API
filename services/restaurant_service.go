@@ -3,9 +3,11 @@ package services
 import (
 	"HalalMate/config/database"
 	"HalalMate/models"
+	"HalalMate/utils"
 	"context"
 	"fmt"
 	"math"
+	"net/http"
 	"sort"
 	"strings"
 
@@ -41,7 +43,7 @@ func haversine(lat1, lon1, lat2, lon2 float64) float64 {
 	return earthRadiusKm * c
 }
 
-func (s *RestaurantService) GetAllRestaurantByLocation(ctx context.Context, latitude, longitude float64) ([]map[string]interface{}, error) {
+func (s *RestaurantService) GetAllRestaurantByLocation(ctx context.Context, latitude, longitude float64, userId string) ([]map[string]interface{}, error) {
 	// Generate geohash for the given location
 	targetGeoHash := geohash.Encode(latitude, longitude)
 
@@ -61,7 +63,7 @@ func (s *RestaurantService) GetAllRestaurantByLocation(ctx context.Context, lati
 			break
 		}
 		if err != nil {
-			return nil, err
+			return nil, utils.NewCustomError(http.StatusInternalServerError, "Failed to get restaurants")
 		}
 
 		docId := doc.Ref.ID
@@ -85,6 +87,10 @@ func (s *RestaurantService) GetAllRestaurantByLocation(ctx context.Context, lati
 			restaurant["id"] = docId
 			fmt.Println(docId)
 			restaurant["distance"] = distance
+			restaurant["isBookmarked"], err = s.IsRestaurantBookmarked(ctx, userId, docId)
+			if err != nil {
+				return nil, utils.NewCustomError(http.StatusInternalServerError, "Failed to get bookmarks restaurant")
+			}
 			restaurants = append(restaurants, restaurant)
 		}
 	}
@@ -99,10 +105,10 @@ func (s *RestaurantService) GetAllRestaurantByLocation(ctx context.Context, lati
 
 //get restaurant by doc id
 
-func (s *RestaurantService) GetRestaurantByIdAndLocation(ctx context.Context, docID string, latitude, longitude float64) (map[string]interface{}, error) {
+func (s *RestaurantService) GetRestaurantByIdAndLocation(ctx context.Context, docID string, latitude, longitude float64, userId string) (map[string]interface{}, error) {
 	doc, err := s.FirestoreClient.Collection("restaurants").Doc(docID).Get(ctx)
 	if err != nil {
-		return nil, err
+		return nil, utils.NewCustomError(http.StatusNotFound, "Restaurant not found")
 	}
 
 	restaurant := make(map[string]interface{})
@@ -121,6 +127,10 @@ func (s *RestaurantService) GetRestaurantByIdAndLocation(ctx context.Context, do
 	distance := haversine(latitude, longitude, geoPoint.Latitude, geoPoint.Longitude)
 	doc.DataTo(&restaurant)
 	restaurant["distance"] = distance
+	restaurant["isBookmarked"], err = s.IsRestaurantBookmarked(ctx, userId, docID)
+	if err != nil {
+		return nil, utils.NewCustomError(http.StatusInternalServerError, "Failed to get bookmarks restaurant")
+	}
 
 	return restaurant, nil
 }
@@ -128,7 +138,7 @@ func (s *RestaurantService) GetRestaurantByIdAndLocation(ctx context.Context, do
 func (s *RestaurantService) GetRestaurantByID(ctx context.Context, docID string) (map[string]interface{}, error) {
 	doc, err := s.FirestoreClient.Collection("restaurants").Doc(docID).Get(ctx)
 	if err != nil {
-		return nil, err
+		return nil, utils.NewCustomError(http.StatusNotFound, "Restaurant not found")
 	}
 
 	restaurant := make(map[string]interface{})
@@ -197,4 +207,20 @@ func (s *RestaurantService) CheckRestaurantExists(ctx context.Context, latitude,
 	}
 
 	return true, nil // Restaurant exists
+}
+
+// IsRestaurantBookmarked checks if a restaurant is bookmarked by a us
+func (s *RestaurantService) IsRestaurantBookmarked(ctx context.Context, userID string, restaurantID string) (bool, error) {
+	iter := s.FirestoreClient.Collection("users").Doc(userID).Collection("bookmarks").
+		Where("restaurantId", "==", restaurantID).Limit(1).Documents(ctx)
+
+	_, err := iter.Next()
+	if err == iterator.Done {
+		return false, nil
+	}
+	if err != nil {
+		return false, utils.NewCustomError(http.StatusInternalServerError, "Failed to check bookmarks")
+	}
+
+	return true, nil
 }

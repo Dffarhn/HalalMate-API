@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"HalalMate/controllers"
+	"HalalMate/middleware"
 
 	"github.com/gin-gonic/gin"
 )
@@ -9,9 +10,9 @@ import (
 func RegisterRestaurantRoutes(router *gin.RouterGroup, restaurantController *controllers.RestaurantController) {
 	restaurantGroup := router.Group("/restaurants")
 	{
-		restaurantGroup.GET("/", restaurantController.GetAllRestaurants)
+		restaurantGroup.GET("/", middleware.AuthMiddleware(), restaurantController.GetAllRestaurants)
 
-		restaurantGroup.GET("/:id", restaurantController.GetRestaurantByID)
+		restaurantGroup.GET("/:id", middleware.AuthMiddleware(), restaurantController.GetRestaurantByID)
 
 	}
 }

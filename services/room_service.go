@@ -3,7 +3,9 @@ package services
 import (
 	"HalalMate/config/database"
 	"HalalMate/models"
+	"HalalMate/utils"
 	"context"
+	"net/http"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -86,7 +88,7 @@ func (s *RoomService) GetRoomByID(ctx context.Context, userId, roomId string) (*
 	// Query room document
 	roomDoc, err := s.FirestoreClient.Collection("users").Doc(userId).Collection("rooms").Doc(roomId).Get(ctx)
 	if err != nil {
-		return nil, err
+		return nil, utils.NewCustomError(http.StatusNotFound, "Room not found")
 	}
 
 	// Convert Firestore document to Room struct

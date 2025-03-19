@@ -46,7 +46,7 @@ func (s *ChatService) StreamRecommendations(
 	defer close(doneChan)
 
 	// Fetch nearby restaurants
-	restaurants, err := s.RestaurantService.GetAllRestaurantByLocation(ctx, location.Latitude, location.Longitude)
+	restaurants, err := s.RestaurantService.GetAllRestaurantByLocation(ctx, location.Latitude, location.Longitude, userId)
 	if err != nil {
 		log.Println("Error fetching restaurants:", err)
 		doneChan <- true

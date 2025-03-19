@@ -90,7 +90,7 @@ func (c *RoomController) GetSpesificRoom(ctx *gin.Context) {
 	// Panggil service dengan Firestore-compatible context
 	roomWithChat, err := c.RoomService.GetRoomByID(ctx.Request.Context(), userId.(string), roomId)
 	if err != nil {
-		utils.ErrorResponse(ctx, http.StatusInternalServerError, "Failed to get room: "+err.Error())
+		ctx.Error(err) // Middleware akan menangani error ini
 		return
 	}
 
