@@ -9,7 +9,7 @@ import (
 	"cloud.google.com/go/firestore"
 	"firebase.google.com/go"
 	"firebase.google.com/go/auth"
-	"github.com/joho/godotenv"
+	// "github.com/joho/godotenv"
 	"google.golang.org/api/option"
 )
 
@@ -19,10 +19,10 @@ var AuthClient       *auth.Client
 
 // InitFirebase initializes both Firestore and Storage clients
 func InitFirebase() {
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatal("Error loading .env file")
-	}
+	// err := godotenv.Load()
+	// if err != nil {
+	// 	log.Fatal("Error loading .env file")
+	// }
 
 	// Get Base64 encoded credentials from env
 	encodedCredentials := environment.GetFirebaseKey();
