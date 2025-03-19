@@ -9,3 +9,7 @@ func GetOpenAIKey() string {
 func GetWebClientId() string {
 	return os.Getenv("WEB_APP_CLIENT_ID") // Simpan Client ID di environment variable
 }
+
+func GetFirebaseKey() string{
+	return os.Getenv("FIREBASE_CONFIG_BASE64")
+}
