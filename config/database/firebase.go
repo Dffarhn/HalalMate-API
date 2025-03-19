@@ -35,11 +35,21 @@ func InitFirebase() {
 	if err != nil {
 		log.Fatalf("Failed to decode Firebase credentials: %v", err)
 	}
+
+	// Get Project ID from environment variables
+	projectID := environment.GetFirebaseProjectID()
+	if projectID == "" {
+		log.Fatal("FIREBASE_PROJECT_ID environment variable is missing")
+	}
 	
 	ctx := context.Background()
 	// Initialize Firestore client
 	firestoreOpt := option.WithCredentialsJSON(decodedCredentials)
-	app, err := firebase.NewApp(ctx, nil, firestoreOpt)
+
+	config := &firebase.Config{
+		ProjectID: projectID,
+	}
+	app, err := firebase.NewApp(ctx, config, firestoreOpt)
 	if err != nil {
 		log.Fatalf("Failed to initialize Firebase Firestore: %v", err)
 	}
@@ -48,12 +58,12 @@ func InitFirebase() {
 
 
 	// Initialize Firestore client
-	FirestoreClient, err = 	FirebaseApp.Firestore(ctx)
+	FirestoreClient, err = 	app.Firestore(ctx)
 	if err != nil {
 		log.Fatalf("Failed to create Firestore client: %v", err)
 	}
 
-	AuthClient, err = FirebaseApp.Auth(ctx)
+	AuthClient, err = app.Auth(ctx)
 	if err != nil {
 		log.Fatalf("Failed to initialize Firebase Auth client: %v", err)
 	}

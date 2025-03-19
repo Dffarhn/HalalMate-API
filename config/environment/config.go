@@ -13,3 +13,7 @@ func GetWebClientId() string {
 func GetFirebaseKey() string{
 	return os.Getenv("FIREBASE_CONFIG_BASE64")
 }
+
+func GetFirebaseProjectID() string{
+	return os.Getenv("FIREBASE_PROJECT_ID")
+}
