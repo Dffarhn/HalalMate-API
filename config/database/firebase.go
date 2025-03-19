@@ -46,13 +46,14 @@ func InitFirebase() {
 	FirebaseApp = app
 	log.Println("Firebase Firestore initialized successfully")
 
+
 	// Initialize Firestore client
-	FirestoreClient, err = app.Firestore(ctx)
+	FirestoreClient, err = 	FirebaseApp.Firestore(ctx)
 	if err != nil {
 		log.Fatalf("Failed to create Firestore client: %v", err)
 	}
 
-	AuthClient, err = app.Auth(ctx)
+	AuthClient, err = FirebaseApp.Auth(ctx)
 	if err != nil {
 		log.Fatalf("Failed to initialize Firebase Auth client: %v", err)
 	}
