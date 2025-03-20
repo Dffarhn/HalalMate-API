@@ -10,10 +10,10 @@ func GetWebClientId() string {
 	return os.Getenv("WEB_APP_CLIENT_ID") // Simpan Client ID di environment variable
 }
 
-func GetFirebaseKey() string{
-	return os.Getenv("FIREBASE_CONFIG_BASE64")
+func GetFirebaseKey() string {
+	return os.Getenv("FIREBASE_CREDENTIALS")
 }
 
-func GetFirebaseProjectID() string{
+func GetFirebaseProjectID() string {
 	return os.Getenv("FIREBASE_PROJECT_ID")
 }
