@@ -46,7 +46,7 @@ func (b *BookmarkController) GetAllBookmark(c *gin.Context) {
 		return
 	}
 
-	bookmarks, err := b.BookmarkService.GetAllBookmarks(context.Background(), userID.(string))
+	bookmarks, err := b.BookmarkService.GetAllBookmarks(context.Background(), userID.(string),latitude,longitude)
 	if err != nil {
 		c.Error(err) // Middleware akan menangani error ini
 		return
