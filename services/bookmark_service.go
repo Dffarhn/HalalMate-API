@@ -5,6 +5,7 @@ import (
 	"HalalMate/models"
 	"HalalMate/utils"
 	"context"
+	"log"
 	"net/http"
 
 	"cloud.google.com/go/firestore"
@@ -27,46 +28,79 @@ func NewBookmarkService() *BookmarkService {
 }
 
 // GetAllBookmarks retrieves all bookmarks for a user
-func (b *BookmarkService) GetAllBookmarks(ctx context.Context, userID string) ([]models.Bookmark, error) {
+func (b *BookmarkService) GetAllBookmarks(ctx context.Context, userID string, latitude, longitude float64) ([]models.Bookmark, error) {
+	log.Printf("Fetching bookmarks for user: %s", userID)
+
 	iter := b.FirestoreClient.Collection("users").Doc(userID).Collection("bookmarks").Documents(ctx)
 	var bookmarks []models.Bookmark
+	var restaurantIDs []string
 
+	// First loop: Fetch bookmarks and collect restaurant IDs
 	for {
 		doc, err := iter.Next()
 		if err == iterator.Done {
 			break
 		}
 		if err != nil {
+			log.Printf("Error fetching bookmarks: %v", err)
 			return nil, utils.NewCustomError(http.StatusInternalServerError, "Failed to fetch bookmarks")
 		}
 
 		var bookmark models.Bookmark
 		if err := doc.DataTo(&bookmark); err != nil {
+			log.Printf("Error parsing bookmark data: %v", err)
 			return nil, utils.NewCustomError(http.StatusInternalServerError, "Failed to parse bookmark data")
 		}
 		bookmark.ID = doc.Ref.ID
-
-		// Ambil data restoran terkait
-		bookmark.Restaurant, err = b.RestaurantService.GetRestaurantByID(ctx, bookmark.RestaurantID)
-		if err != nil {
-			// Jika restoran tidak ditemukan, tetap lanjutkan tanpa return error
-			if customErr, ok := err.(*utils.CustomError); ok && customErr.StatusCode == http.StatusNotFound {
-				bookmark.Restaurant = nil // Atur sebagai nil agar tidak mengganggu response utama
-			} else {
-				return nil, utils.NewCustomError(http.StatusInternalServerError, "Failed to fetch restaurant details")
-			}
-		}
-
 		bookmarks = append(bookmarks, bookmark)
+
+		log.Printf("Fetched bookmark: %+v", bookmark)
+
+		// Collect restaurant ID if not empty
+		if bookmark.RestaurantID != "" {
+			restaurantIDs = append(restaurantIDs, bookmark.RestaurantID)
+		}
 	}
 
-	// Jika tidak ada bookmark yang ditemukan, kembalikan error 404
-	// if len(bookmarks) == 0 {
-	// 	return nil, utils.NewCustomError(http.StatusNotFound, "No bookmarks found")
-	// }
+	log.Printf("Collected Restaurant IDs: %v", restaurantIDs)
 
+	// Fetch all restaurants in one query
+	restaurantsMap := make(map[string]map[string]interface{})
+	if len(restaurantIDs) > 0 {
+		log.Println("Fetching restaurant details for collected IDs...")
+
+		restaurants, err := b.RestaurantService.GetRestaurantsByIDs(ctx, restaurantIDs, latitude,longitude)
+		if err != nil {
+			log.Printf("Error fetching restaurant details: %v", err)
+			return nil, utils.NewCustomError(http.StatusInternalServerError, "Failed to fetch restaurant details")
+		}
+
+		// Convert list to map for quick lookup
+		for _, restaurant := range restaurants {
+			if id, ok := restaurant["id"].(string); ok {
+				restaurantsMap[id] = restaurant
+				log.Printf("Mapped restaurant: %s -> %+v", id, restaurant)
+			}
+		}
+	} else {
+		log.Println("No restaurant IDs found, skipping restaurant lookup.")
+	}
+
+	// Second loop: Map restaurants to bookmarks
+	for i := range bookmarks {
+		if restaurant, exists := restaurantsMap[bookmarks[i].RestaurantID]; exists {
+			bookmarks[i].Restaurant = restaurant
+			log.Printf("Mapped restaurant to bookmark: %+v", bookmarks[i])
+		} else {
+			bookmarks[i].Restaurant = nil
+			log.Printf("No matching restaurant found for bookmark ID: %s", bookmarks[i].ID)
+		}
+	}
+
+	log.Println("Successfully fetched all bookmarks.")
 	return bookmarks, nil
 }
+
 
 // PostBookmark adds a new bookmark for a user
 func (b *BookmarkService) PostBookmark(ctx context.Context, userID string, bookmark models.Bookmark) (*models.Bookmark, error) {

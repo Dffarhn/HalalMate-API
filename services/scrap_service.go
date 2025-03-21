@@ -35,7 +35,6 @@ func NewScrapService(openAIService *OpenAIService) *ScrapService {
 	}
 }
 
-// ScrapePlaces fetches places from Google Maps
 func (s *ScrapService) ScrapePlaces(searchURLs []string, placeChan chan<- models.Place, doneChan chan<- bool) {
 	var wg sync.WaitGroup
 
@@ -47,40 +46,33 @@ func (s *ScrapService) ScrapePlaces(searchURLs []string, placeChan chan<- models
 			log.Printf("Scraping started for URL: %s\n", pageURL)
 			places := scrapeData(pageURL)
 
-			// Another WaitGroup for menu scraping
 			var menuWg sync.WaitGroup
 			sem := make(chan struct{}, 5) // Limit to 5 concurrent menu scraping goroutines
-
 			maxPlaces := 20
-
 			if len(places) < maxPlaces {
-				maxPlaces = len(places) // Prevent out-of-range index
+				maxPlaces = len(places)
 			}
 
-			for i := 0; i < maxPlaces; i++ { // Limit to maxPlaces
+			var placesToSave []*models.Place // Slice to collect places for batch save
 
+			for i := 0; i < maxPlaces; i++ {
 				exists, err := s.RestaurantService.CheckRestaurantExists(context.Background(), places[i].Location.Latitude, places[i].Location.Longitude, places[i].Title)
 				if err != nil {
 					log.Printf("❌ Error checking restaurant existence for %s: %v\n", places[i].Title, err)
-					continue // Skip if there's an error
+					continue
 				}
 				if exists {
 					log.Printf("⚠️ Skipping duplicate restaurant: %s\n", places[i].Title)
-					continue // Skip if restaurant already exists
+					continue
 				}
 
 				menuWg.Add(1)
 				sem <- struct{}{} // Acquire a slot
 
 				go func(i int) {
-					//if the title and longitude and langitude same dont do this
-					//if the title and longitude and langitude same dont do this
-					//if the title and longitude and langitude same dont do this
-
 					defer menuWg.Done()
 					defer func() { <-sem }() // Release slot after completion
 
-					// Run menu and review scraping in parallel
 					menuChan := make(chan []string)
 					reviewChan := make(chan []string)
 					errChan := make(chan error, 2)
@@ -92,7 +84,6 @@ func (s *ScrapService) ScrapePlaces(searchURLs []string, placeChan chan<- models
 						}
 						menuChan <- menu
 						places[i].Address = address
-
 					}()
 					go func() {
 						reviews, err := scrapeDataReview(places[i].MapsLink, places[i].Title)
@@ -106,7 +97,6 @@ func (s *ScrapService) ScrapePlaces(searchURLs []string, placeChan chan<- models
 					menuLink := <-menuChan
 					reviewUser := <-reviewChan
 
-					// Only add to the channel if menuLink and reviewUser are not empty
 					if menuLink != nil && reviewUser != nil {
 						places[i].MenuLink = menuLink
 						places[i].Reviews = reviewUser
@@ -118,16 +108,10 @@ func (s *ScrapService) ScrapePlaces(searchURLs []string, placeChan chan<- models
 
 						placeChan <- places[i]
 
-						// Save the place to Firestore
-						err = s.RestaurantService.SaveRestaurant(context.Background(), &places[i])
-						if err != nil {
-							log.Printf("❌ Failed to save restaurant %s: %v\n", places[i].Title, err)
-						} else {
-							log.Printf("✅ Successfully saved restaurant: %s\n", places[i].Title)
-						}
+						// Collect place in the slice for bulk save
+						placesToSave = append(placesToSave, &places[i])
 					}
 
-					// Handle errors (if any)
 					close(errChan)
 					for err := range errChan {
 						log.Printf("❌ Error processing %s: %v\n", places[i].Title, err)
@@ -135,14 +119,25 @@ func (s *ScrapService) ScrapePlaces(searchURLs []string, placeChan chan<- models
 				}(i)
 			}
 
-			menuWg.Wait() // Wait for all menu scraping goroutines to complete
+			menuWg.Wait() // Wait for all scraping goroutines to complete
+
+			// Perform bulk save to Firestore
+			if len(placesToSave) > 0 {
+				err := s.RestaurantService.SaveRestaurants(context.Background(), placesToSave)
+				if err != nil {
+					log.Printf("❌ Bulk save failed: %v\n", err)
+				} else {
+					log.Printf("✅ Successfully saved %d restaurants\n", len(placesToSave))
+				}
+			}
 		}(pageURL)
 	}
 
 	wg.Wait()
-	close(placeChan) // Close channel after all places are scraped
-	doneChan <- true // Signal that scraping is complete
+	close(placeChan)
+	doneChan <- true
 }
+
 
 func scrapeData(pageURL string) []models.Place {
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],

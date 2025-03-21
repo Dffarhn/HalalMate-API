@@ -33,7 +33,7 @@ func (s *OpenAIService) DownloadAndEncodeImages(imageURLs []string) ([]string, e
 
 	for _, imageURL := range imageURLs {
 		// Download the image
-		resp, err := http.Get(imageURL)
+		resp, err := http.Get(replaceImageQuality(imageURL))
 		if err != nil {
 			return nil, fmt.Errorf("error downloading image %s: %w", imageURL, err)
 		}
@@ -54,6 +54,15 @@ func (s *OpenAIService) DownloadAndEncodeImages(imageURLs []string) ([]string, e
 	}
 
 	return encodedImages, nil
+}
+
+// Function to replace any resolution with "s1600-k-no"
+func replaceImageQuality(imageURL string) string {
+	// Regex to match "s<number>-k-no"
+	re := regexp.MustCompile(`s\d+-k-no`)
+	
+	// Replace it with "s1600-k-no"
+	return re.ReplaceAllString(imageURL, "s1600-k-no")
 }
 
 func (s *OpenAIService) AnalyzeImages(ctx context.Context, imageUrls []string) ([]models.MenuItem, error) {

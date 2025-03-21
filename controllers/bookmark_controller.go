@@ -6,6 +6,7 @@ import (
 	"HalalMate/utils"
 	"context"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -25,6 +26,23 @@ func (b *BookmarkController) GetAllBookmark(c *gin.Context) {
 	userID, exists := c.Get("userId")
 	if !exists {
 		utils.ErrorResponse(c, http.StatusUnauthorized, "UserId is required")
+		return
+	}
+
+	
+	//the latitude and longtitude is from query
+	latitudeStr := c.Query("latitude")
+	longitudeStr := c.Query("longitude")
+
+	latitude, err := strconv.ParseFloat(latitudeStr, 64)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, "Invalid latitude")
+		return
+	}
+
+	longitude, err := strconv.ParseFloat(longitudeStr, 64)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, "Invalid longitude")
 		return
 	}
 
