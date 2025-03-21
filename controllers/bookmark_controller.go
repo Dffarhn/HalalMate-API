@@ -29,7 +29,6 @@ func (b *BookmarkController) GetAllBookmark(c *gin.Context) {
 		return
 	}
 
-	
 	//the latitude and longtitude is from query
 	latitudeStr := c.Query("latitude")
 	longitudeStr := c.Query("longitude")
