@@ -96,7 +96,7 @@ func (s *ChatService) StreamRecommendations(
 			"  **Name**: {{name}}\n"+
 			"  **ID**: {{id}}\n"+
 			"  **Distance**: {{distance}} km\n"+
-			"  **Image_URL: {{image_url}}"+
+			"  **Image_URL: {{image_url}}\n"+
 			"  **Menu Highlights**: {{menu}}\n"+
 			"  ```\n"+
 			"- Feel free to add context or suggestions outside this block to make the response more engaging.\n"+
@@ -106,7 +106,7 @@ func (s *ChatService) StreamRecommendations(
 			"  **Name**: Sushi Go\n"+
 			"  **ID**: 12345\n"+
 			"  **Distance**: 2.4 km\n"+
-			"  **Image_URL: https://lh5.googleusercontent.com/p/AF1QipMc47gMvdQbWmWO1R3p0jyAQLSRuf37GYegszai=w92-h92-k-no"+
+			"  **Image_URL: https://lh5.googleusercontent.com/p/AF1QipMc47gMvdQbWmWO1R3p0jyAQLSRuf37GYegszai=w92-h92-k-no\n"+
 			"  **Menu Highlights**: Salmon Sashimi, Tuna Roll\n"+
 			"  ```\n\n"+
 			" **Reminder**: Do **not** exceed the provided data limits, and avoid making assumptions about missing details.",
