@@ -60,7 +60,7 @@ func (s *OpenAIService) DownloadAndEncodeImages(imageURLs []string) ([]string, e
 func replaceImageQuality(imageURL string) string {
 	// Regex to match "s<number>-k-no"
 	re := regexp.MustCompile(`s\d+-k-no`)
-	
+
 	// Replace it with "s1600-k-no"
 	return re.ReplaceAllString(imageURL, "s1600-k-no")
 }
@@ -207,3 +207,160 @@ func (s *OpenAIService) ChatStream(ctx context.Context, systemPrompt string, use
 	// Return the response stream (caller must close it)
 	return resp.Body, nil
 }
+
+// Chat sends a request to OpenAI's API and returns a non-streaming response
+func (s *OpenAIService) Chat(ctx context.Context, systemPrompt string, userPrompt string) (map[string]interface{}, error) {
+	url := "https://api.openai.com/v1/chat/completions"
+	payload := map[string]interface{}{
+		"model": "gpt-4o",
+		"messages": []map[string]interface{}{
+			{"role": "system", "content": systemPrompt},
+			{"role": "user", "content": userPrompt},
+		},
+		// No "stream": true
+	}
+
+	jsonData, _ := json.Marshal(payload)
+	req, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	req.Header.Set("Authorization", "Bearer "+s.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("error sending request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		log.Println("OpenAI API error response:", string(body))
+		return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("error decoding response: %w", err)
+	}
+
+	if len(result.Choices) == 0 {
+		return nil, fmt.Errorf("no choices returned in response")
+	}
+
+	// Clean markdown if needed
+	cleaned := strings.TrimSpace(result.Choices[0].Message.Content)
+	if strings.HasPrefix(cleaned, "```json") {
+		cleaned = strings.TrimPrefix(cleaned, "```json")
+		cleaned = strings.TrimSuffix(cleaned, "```")
+		cleaned = strings.TrimSpace(cleaned)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(cleaned), &parsed); err != nil {
+		return nil, fmt.Errorf("error parsing JSON: %w", err)
+	}
+
+	return parsed, nil
+}
+
+
+func (s *OpenAIService) ChatWithVision(ctx context.Context, systemPrompt string, base64Images []string) (map[string]interface{}, error) {
+	url := "https://api.openai.com/v1/chat/completions"
+
+	var imageMessages []map[string]interface{}
+	for _, b64 := range base64Images {
+		imageMessages = append(imageMessages, map[string]interface{}{
+			"type": "image_url",
+			"image_url": map[string]interface{}{
+				"url": b64,
+			},
+		})
+	}
+	
+
+	messages := []map[string]interface{}{
+		{
+			"role":    "system",
+			"content": systemPrompt,
+		},
+		{
+			"role": "user",
+			"content": []interface{}{
+				map[string]string{
+					"type": "text",
+					"text": "Berikut ini adalah dua gambar kemasan produk makanan, tolong analisa:",
+				},
+				imageMessages[0],
+				imageMessages[1],
+			},
+		},
+	}
+
+	payload := map[string]interface{}{
+		"model":    "gpt-4o", // atau "gpt-4-vision-preview"
+		"messages": messages,
+	}
+
+	jsonData, _ := json.Marshal(payload)
+	fmt.Println("Payload:", string(jsonData)) // Debugging: Print the payload
+
+	req, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	req.Header.Set("Authorization", "Bearer "+s.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Println("Error sending request:", err) // Debugging: Log the error
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		fmt.Println("API Error Response:", string(body)) // Debugging: Log the API error response
+		return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
+	}
+	
+	body, _ := io.ReadAll(resp.Body)
+	fmt.Println("Raw API Response:", string(body)) // Debugging
+	
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("error decoding response: %w", err)
+	}
+	
+	if len(result.Choices) == 0 {
+		return nil, fmt.Errorf("no choices returned in response")
+	}
+
+	// Clean markdown if needed
+	cleaned := strings.TrimSpace(result.Choices[0].Message.Content)
+	if strings.HasPrefix(cleaned, "```json") {
+		cleaned = strings.TrimPrefix(cleaned, "```json")
+		cleaned = strings.TrimSuffix(cleaned, "```")
+		cleaned = strings.TrimSpace(cleaned)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(cleaned), &parsed); err != nil {
+		return nil, fmt.Errorf("error parsing JSON: %w", err)
+	}
+
+	return parsed, nil
+}
+

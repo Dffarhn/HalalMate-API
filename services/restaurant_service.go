@@ -264,7 +264,7 @@ func (s *RestaurantService) GetAllRestaurantByLocation(ctx context.Context, lati
 
 		// Haversine filter
 		distance := haversine(latitude, longitude, geoPoint.Latitude, geoPoint.Longitude)
-		if distance <= 3.0 {
+		if distance <= 10.0 {
 			restaurant := make(map[string]interface{})
 			doc.DataTo(&restaurant)
 			restaurant["distance"] = distance

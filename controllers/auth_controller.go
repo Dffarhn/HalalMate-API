@@ -3,6 +3,8 @@ package controllers
 import (
 	"HalalMate/services"
 	"HalalMate/utils"
+	"bytes"
+	"io"
 	"log"
 	"net/http"
 
@@ -32,17 +34,31 @@ func (h *AuthController) RegisterUser(c *gin.Context) {
 		Email           string `json:"email" binding:"required"`
 		Password        string `json:"password" binding:"required"`
 		RetypedPassword string `json:"retyped_password" binding:"required"`
-		FCMToken        string `json:"fcm_token"`
+		// FCMToken        string `json:"fcm_token"`
 	}
 
+
+	// 🕵️ Read and log the raw body
+	bodyBytes, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		utils.ErrorResponse(c, http.StatusBadRequest, "Failed to read request body")
+		return
+	}
+
+	log.Printf("[DEBUG] 🔍 Raw JSON Body: %s", string(bodyBytes))
+
+	// 🧠 Replace the body so it can still be read by ShouldBindJSON
+	c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
 	if err := c.ShouldBindJSON(&req); err != nil {
+		log.Printf("[ERROR] 🔥 Bind error: %v", err)
 		utils.ErrorResponse(c, http.StatusBadRequest, "Invalid request format")
 		return
 	}
 
-	user, token, err := h.AuthService.Register(req.Email, req.Username, req.Password, req.FCMToken)
+	user, token, err := h.AuthService.Register(req.Email, req.Username, req.Password)
 	if err != nil {
-		utils.ErrorResponse(c, http.StatusInternalServerError, err.Error())
+		c.Error(err)
 		return
 	}
 

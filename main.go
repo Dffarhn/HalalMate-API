@@ -16,16 +16,17 @@ import (
 
 func main() {
 
-	//firebase init
-	database.InitFirebase()
-
+	
 	// Load environment variables
-
+	
 	err := godotenv.Load()
 	if err != nil {
 		log.Println("⚠️  No .env file found, using default values")
 	}
-
+	
+	//firebase init
+	database.InitFirebase()
+	
 	// Setup Gin router
 	r := gin.Default()
 

@@ -138,7 +138,6 @@ func (s *ScrapService) ScrapePlaces(searchURLs []string, placeChan chan<- models
 	doneChan <- true
 }
 
-
 func scrapeData(pageURL string) []models.Place {
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("disable-geolocation", false),
@@ -369,6 +368,9 @@ func extractData(html string) []models.Place {
 		reviewCount := s.Find(".UY7F9").Text()
 		reviewCountClean := cleanReviewCount(reviewCount)
 
+		rawImageURL := s.Find("img").AttrOr("src", "N/A")
+		enhancedImageURL := replaceImageProfileQuality(rawImageURL)
+
 		place := models.Place{
 			Title:       s.Find(".qBF1Pd").Text(),
 			Rating:      s.Find(".MW4etd").Text(),
@@ -379,7 +381,7 @@ func extractData(html string) []models.Place {
 				Longitude: long,
 			},
 			OpeningStatus: s.Find(".W4Efsd span[style*='color']").Text(),
-			ImageURL:      s.Find("img").AttrOr("src", "N/A"),
+			ImageURL:      enhancedImageURL,
 			MapsLink:      s.Find("a[href]").AttrOr("href", "N/A"),
 		}
 		places = append(places, place)
@@ -452,4 +454,13 @@ func cleanReviewCount(reviewText string) string {
 	re := regexp.MustCompile(`\d+\.\d+`) // Match a number like "1.297"
 	match := re.FindString(reviewText)
 	return match
+}
+
+// Function to replace any resolution with "s1600-k-no"
+func replaceImageProfileQuality(imageURL string) string {
+	// Regex to match the pattern for resolution like w80-h106 or any size (s<number>-k-no)
+	re := regexp.MustCompile(`w\d+-h\d+-k-no`)
+
+	// Replace it with "s1600-k-no" to get higher quality
+	return re.ReplaceAllString(imageURL, "s1600-k-no")
 }

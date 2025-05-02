@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log"
 	"math/big"
+	"net/http"
 	"strings"
 
 	"cloud.google.com/go/firestore"
@@ -38,7 +39,19 @@ func generateUUID() (string, error) {
 }
 
 // Register creates a new user in Firestore
-func (s *AuthService) Register(email, username, password string, fcmToken string) (*firestore.DocumentRef, string, error) {
+func (s *AuthService) Register(email, username, password string) (*firestore.DocumentRef, string, error) {
+	ctx := context.Background()
+
+	// Check if email already exists
+	query := s.FirestoreClient.Collection("users").Where("email", "==", email).Limit(1)
+	docs, err := query.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, "", utils.NewCustomError(http.StatusInternalServerError, "internal server error")
+	}
+	if len(docs) > 0 {
+		return nil, "", utils.NewCustomError(http.StatusConflict, "email already exists")
+	}
+
 	// Hash the password
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
@@ -52,27 +65,27 @@ func (s *AuthService) Register(email, username, password string, fcmToken string
 
 	// Create user in Firestore
 	userRef := s.FirestoreClient.Collection("users").Doc(userID)
-	_, err = userRef.Set(context.Background(), map[string]interface{}{
+	_, err = userRef.Set(ctx, map[string]interface{}{
 		"id":        userRef.ID,
 		"email":     email,
 		"username":  username,
 		"password":  string(hashedPassword),
 		"CreatedAt": firestore.ServerTimestamp,
 		"UpdatedAt": firestore.ServerTimestamp,
-		"fcmToken":  fcmToken,
 	})
 	if err != nil {
 		return nil, "", err
 	}
 
 	// Generate JWT token
-	token, err := utils.GenerateToken(userRef.ID) // Use email or UID as payload
+	token, err := utils.GenerateToken(userRef.ID)
 	if err != nil {
 		return nil, "", err
 	}
 
 	return userRef, token, nil
 }
+
 
 func (s *AuthService) Login(email string, password string) (string, error) {
 	log.Printf("[DEBUG] Searching for user: %s", email)

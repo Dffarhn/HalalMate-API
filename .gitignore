@@ -1,2 +1,6 @@
 .env
 halalmate-db-firebase-adminsdk-fbsvc-e090138059.json
+tmp/
+/tmp
+.idea/
+/.idea
