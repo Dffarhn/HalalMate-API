@@ -11,5 +11,6 @@ func RegisterScraperRoutes(router *gin.RouterGroup , scraperController *controll
 	scraperGroup := router.Group("/scraper")
 	{
 		scraperGroup.POST("/", scraperController.GetAllScrapePlaces )
+		scraperGroup.POST("/restaurant",scraperController.ScrapeSinglePlace)
 	}
 }

@@ -15,7 +15,7 @@ import (
 
 	"cloud.google.com/go/firestore"
 	"github.com/PuerkitoBio/goquery"
-	"github.com/chromedp/cdproto/cdp"
+	// "github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/chromedp"
 )
@@ -44,7 +44,7 @@ func (s *ScrapService) ScrapePlaces(searchURLs []string, placeChan chan<- models
 			defer wg.Done()
 
 			log.Printf("Scraping started for URL: %s\n", pageURL)
-			places := scrapeData(pageURL)
+			places := scrapeAllData(pageURL)
 
 			var menuWg sync.WaitGroup
 			sem := make(chan struct{}, 5) // Limit to 5 concurrent menu scraping goroutines
@@ -53,10 +53,13 @@ func (s *ScrapService) ScrapePlaces(searchURLs []string, placeChan chan<- models
 				maxPlaces = len(places)
 			}
 
-			var placesToSave []*models.Place // Slice to collect places for batch save
+			// var placesToSave []*models.Place // Slice to collect places for batch save
+
+			var placesToSaveHalal []*models.Place // Slice to collect halal places for batch save
+			var placesToSaveHaram []*models.Place // Slice
 
 			for i := 0; i < maxPlaces; i++ {
-				exists, err := s.RestaurantService.CheckRestaurantExists(context.Background(), places[i].Location.Latitude, places[i].Location.Longitude, places[i].Title)
+				exists, _, err := s.RestaurantService.CheckRestaurantExists(context.Background(), places[i].Location.Latitude, places[i].Location.Longitude, places[i].Title)
 				if err != nil {
 					log.Printf("❌ Error checking restaurant existence for %s: %v\n", places[i].Title, err)
 					continue
@@ -104,12 +107,16 @@ func (s *ScrapService) ScrapePlaces(searchURLs []string, placeChan chan<- models
 						if err != nil {
 							errChan <- err
 						}
-						places[i].Menu = menuList
+						places[i].Menu = menuList.Menu
 
 						placeChan <- places[i]
 
 						// Collect place in the slice for bulk save
-						placesToSave = append(placesToSave, &places[i])
+						if menuList.HalalStatus == "halal" {
+							placesToSaveHalal = append(placesToSaveHalal, &places[i])
+						} else {
+							placesToSaveHaram = append(placesToSaveHaram, &places[i])
+						}
 					}
 
 					close(errChan)
@@ -121,13 +128,22 @@ func (s *ScrapService) ScrapePlaces(searchURLs []string, placeChan chan<- models
 
 			menuWg.Wait() // Wait for all scraping goroutines to complete
 
-			// Perform bulk save to Firestore
-			if len(placesToSave) > 0 {
-				err := s.RestaurantService.SaveRestaurants(context.Background(), placesToSave)
+			if len(placesToSaveHalal) > 0 {
+				err := s.RestaurantService.SaveRestaurants(context.Background(), placesToSaveHalal)
 				if err != nil {
-					log.Printf("❌ Bulk save failed: %v\n", err)
+					log.Printf("❌ Bulk save (Halal) failed: %v\n", err)
 				} else {
-					log.Printf("✅ Successfully saved %d restaurants\n", len(placesToSave))
+					log.Printf("✅ Successfully saved %d halal restaurants\n", len(placesToSaveHalal))
+				}
+			}
+
+			// Perform bulk save for haram restaurants
+			if len(placesToSaveHaram) > 0 {
+				err := s.RestaurantService.SaveRestaurantsHaram(context.Background(), placesToSaveHaram)
+				if err != nil {
+					log.Printf("❌ Bulk save (Haram) failed: %v\n", err)
+				} else {
+					log.Printf("✅ Successfully saved %d haram restaurants\n", len(placesToSaveHaram))
 				}
 			}
 		}(pageURL)
@@ -138,7 +154,7 @@ func (s *ScrapService) ScrapePlaces(searchURLs []string, placeChan chan<- models
 	doneChan <- true
 }
 
-func scrapeData(pageURL string) []models.Place {
+func scrapeAllData(pageURL string) []models.Place {
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("disable-geolocation", false),
 		chromedp.Flag("use-mock-keychain", true),
@@ -246,16 +262,19 @@ func (s *ScrapService) scrapeDataMenu(pageURL string) ([]string, string, error) 
 			return chromedp.WaitVisible("div.m6QErb.DxyBCb.kA9KIf.dS8AEf.XiKgde div.m6QErb.XiKgde", chromedp.ByQuery).Do(ctx)
 		}),
 
-		// scrollPhotoMenu(3), // Scroll multiple times to load more images
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			for i := 0; i < 5; i++ { // Scroll multiple times
-				err := chromedp.Run(ctx,
-					chromedp.Evaluate(`window.scrollBy(0, document.body.scrollHeight)`, nil),
-					chromedp.Sleep(2*time.Second), // Wait for more images to load
-				)
+			for i := 0; i < 5; i++ {
+				err := chromedp.Evaluate(`
+			(function() {
+				const el = document.querySelector('div.m6QErb.DxyBCb.kA9KIf.dS8AEf.XiKgde');
+				if (el) el.scrollTop = el.scrollHeight;
+			})()
+		`, nil).Do(ctx)
+
 				if err != nil {
 					return err
 				}
+				time.Sleep(2 * time.Second)
 			}
 			return nil
 		}),
@@ -281,7 +300,6 @@ func (s *ScrapService) scrapeDataMenu(pageURL string) ([]string, string, error) 
 		return nil, "", err
 	}
 
-	// imageMenuList := extractImageURLs(imageElements)
 
 	return imageMenuList, addressRestaurant, nil
 }
@@ -293,12 +311,10 @@ func scrapeDataReview(pageURL, nameRestaurant string) ([]string, error) {
 	ctx, cancel = context.WithTimeout(ctx, 60*time.Second) // Set timeout
 	defer cancel()
 
-	var nodes []*cdp.Node // Stores review text elements
-
 	log.Printf("🚀 Navigating to: %s\n", pageURL)
 
 	reviewButtonSelector := fmt.Sprintf(`div.RWPxGd button.hh2c6[aria-label="Ulasan untuk %s"]`, nameRestaurant)
-
+	var reviewTexts []string
 	err := chromedp.Run(ctx,
 		chromedp.Navigate(pageURL),
 		chromedp.Sleep(10*time.Second), // Wait for page to load
@@ -320,29 +336,39 @@ func scrapeDataReview(pageURL, nameRestaurant string) ([]string, error) {
 		// scrollReviews(3),
 
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			for i := 0; i < 5; i++ { // Scroll multiple times
-				err := chromedp.Run(ctx,
-					chromedp.Evaluate(`window.scrollBy(0, document.body.scrollHeight)`, nil),
-					chromedp.Sleep(2*time.Second), // Wait for more images to load
-				)
+			for i := 0; i < 5; i++ {
+				err := chromedp.Evaluate(`
+			(function() {
+				const el = document.querySelector('div.m6QErb.DxyBCb.kA9KIf.dS8AEf.XiKgde');
+				if (el) el.scrollTop = el.scrollHeight;
+			})()
+		`, nil).Do(ctx)
+
 				if err != nil {
 					return err
 				}
+				time.Sleep(2 * time.Second)
 			}
 			return nil
 		}),
 
-		// Extract review texts if section is visible
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			var exists bool
+
+			// Check if at least one review element is present
 			if err := chromedp.Evaluate(`document.querySelector('div.m6QErb.XiKgde div.jftiEf.fontBodyMedium div.GHT2ce div.MyEned span.wiI7pd') !== null`, &exists).Do(ctx); err != nil {
 				return err
 			}
-			if exists {
-				return chromedp.Nodes(`div.m6QErb.XiKgde div.jftiEf.fontBodyMedium div.GHT2ce div.MyEned span.wiI7pd`, &nodes, chromedp.ByQueryAll).Do(ctx)
+			if !exists {
+				log.Println("⚠️ No reviews found.")
+				return nil
 			}
-			log.Println("⚠️ No reviews found.")
-			return nil
+
+			// Extract inner text of all matched review elements
+			return chromedp.Evaluate(`
+		Array.from(document.querySelectorAll('div.m6QErb.XiKgde div.jftiEf.fontBodyMedium div.GHT2ce div.MyEned span.wiI7pd'))
+			.map(el => el.innerText)
+	`, &reviewTexts).Do(ctx)
 		}),
 	)
 
@@ -351,7 +377,9 @@ func scrapeDataReview(pageURL, nameRestaurant string) ([]string, error) {
 		return nil, err
 	}
 
-	return extractReviewTexts(nodes), nil
+	log.Printf("Reviews: %s", strings.Join(reviewTexts, ", "))
+
+	return reviewTexts, nil
 }
 
 func extractData(html string) []models.Place {
@@ -408,17 +436,17 @@ func extractSearchQuery(pageURL string) string {
 	return strings.ReplaceAll(queryPart, "+", " ")      // Convert to readable format
 }
 
-func extractReviewTexts(nodes []*cdp.Node) []string {
-	var reviews []string
-	for _, node := range nodes {
-		if text := node.NodeValue; text != "" {
-			reviews = append(reviews, text)
-		} else if len(node.Children) > 0 {
-			reviews = append(reviews, node.Children[0].NodeValue)
-		}
-	}
-	return reviews
-}
+// func extractReviewTexts(nodes []*cdp.Node) []string {
+// 	var reviews []string
+// 	for _, node := range nodes {
+// 		if text := node.NodeValue; text != "" {
+// 			reviews = append(reviews, text)
+// 		} else if len(node.Children) > 0 {
+// 			reviews = append(reviews, node.Children[0].NodeValue)
+// 		}
+// 	}
+// 	return reviews
+// }
 
 func scrollMultipleTimes(times int, searchQuery string) chromedp.Tasks {
 	var tasks chromedp.Tasks
@@ -463,4 +491,182 @@ func replaceImageProfileQuality(imageURL string) string {
 
 	// Replace it with "s1600-k-no" to get higher quality
 	return re.ReplaceAllString(imageURL, "s1600-k-no")
+}
+
+// 
+
+type RestaurantStatusResponse struct {
+	Status string `json:"status"`
+	Title  string `json:"title"`
+}
+
+
+func (s *ScrapService) ScrapeSinglePlace(mapsLink string) (*RestaurantStatusResponse, error) {
+	log.Printf("🔍 Scraping single place: %s\n", mapsLink)
+
+	// Step 1: Scrape basic data from HTML
+	place := scrapeSinglePlaceHTML(mapsLink)
+	if place == nil {
+		return nil, fmt.Errorf("failed to scrape base place data from: %s", mapsLink)
+	}
+
+	// Step 2: Check if restaurant already exists
+	exists, status, err := s.RestaurantService.CheckRestaurantExists(
+		context.Background(),
+		place.Location.Latitude,
+		place.Location.Longitude,
+		place.Title,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("error checking existence: %w", err)
+	}
+	if exists {
+		// Restaurant already exists, return its status
+		log.Printf("⚠️ Restaurant already exists: %s. Status: %s\n", place.Title, status)
+		return &RestaurantStatusResponse{
+			Status: status,
+			Title:  place.Title,
+		}, nil // Return the existing status and title
+	}
+
+	// Step 3: Scrape additional async data (menu + reviews)
+	menuChan := make(chan []string)
+	reviewChan := make(chan []string)
+	errChan := make(chan error, 2)
+
+	// Menu scraping
+	go func() {
+		menu, address, err := s.scrapeDataMenu(mapsLink)
+		if err != nil {
+			errChan <- err
+			menuChan <- nil
+			return
+		}
+		place.Address = address
+		menuChan <- menu
+	}()
+
+	// Review scraping
+	go func() {
+		reviews, err := scrapeDataReview(mapsLink, place.Title)
+		if err != nil {
+			errChan <- err
+			reviewChan <- nil
+			return
+		}
+		reviewChan <- reviews
+	}()
+
+	menuLink := <-menuChan
+	reviewUser := <-reviewChan
+
+	// Step 4: Attach data if available
+	if menuLink != nil && reviewUser != nil {
+		place.MenuLink = menuLink
+		place.Reviews = reviewUser
+
+		menuList, err := s.OpenAIService.AnalyzeImages(context.Background(), menuLink)
+		if err != nil {
+			log.Printf("❌ Error analyzing images: %v\n", err)
+		} else {
+			place.Menu = menuList.Menu
+			if menuList.HalalStatus == "halal" {
+				// Step 5: Save to DB
+				err = s.RestaurantService.SaveRestaurants(context.Background(), []*models.Place{place})
+				if err != nil {
+					return nil, fmt.Errorf("failed to save restaurant: %w", err)
+				}
+
+				// Return "halal" status with the restaurant title
+				log.Printf("✅ Halal Restaurant saved: %s\n", place.Title)
+				return &RestaurantStatusResponse{
+					Status: "halal",
+					Title:  place.Title,
+				}, nil
+			} else {
+
+				err := s.RestaurantService.SaveRestaurantsHaram(context.Background(), []*models.Place{place})
+				if err != nil {
+					log.Printf("❌ Bulk save (Haram) failed: %v\n", err)
+				}
+				// Return "haram" status with the restaurant title
+				log.Printf("✅ Haram Restaurant saved: %s\n", place.Title)
+				return &RestaurantStatusResponse{
+					Status: "haram",
+					Title:  place.Title,
+				}, nil
+			}
+		}
+	}
+
+	// Default return if no valid data
+	return nil, fmt.Errorf("failed to scrape or analyze data for: %s", mapsLink)
+}
+
+func scrapeSinglePlaceHTML(pageURL string) *models.Place {
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.Flag("disable-geolocation", false),
+		chromedp.Flag("use-mock-keychain", true),
+	)
+
+	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
+	defer cancel()
+
+	ctx, cancel := chromedp.NewContext(allocCtx)
+	defer cancel()
+
+	ctx, cancel = context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	var pageHTML string
+	var currentURL string // Untuk menyimpan URL setelah redirect atau perubahan otomatis
+
+	log.Printf("Navigating to place page: %s\n", pageURL)
+
+	err := chromedp.Run(ctx,
+		chromedp.Navigate(pageURL),
+		chromedp.Sleep(2*time.Second),
+		chromedp.OuterHTML("body", &pageHTML),
+		chromedp.Location(&currentURL), // Ambil URL sebenarnya dari browser
+	)
+	if err != nil {
+		log.Printf("Failed to load single place page: %v\n", err)
+		return nil
+	}
+
+	log.Printf("Current loaded URL: %s\n", currentURL)
+	log.Println("Extracting single place data...")
+
+	return extractSinglePlaceData(pageHTML, currentURL) // Kirim URL hasil navigasi
+}
+
+func extractSinglePlaceData(html string, mapsLink string) *models.Place {
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		log.Println("Error parsing HTML:", err)
+		return nil
+	}
+
+	// Try finding accurate selectors for a single place view
+	title := doc.Find("h1.DUwDvf").Text()
+	address := doc.Find("button[data-item-id='address']").Text()
+	reviewCount := doc.Find(".UY7F9").Text()
+	cleanedReviewCount := cleanReviewCount(reviewCount)
+	imageURL := doc.Find("img[src]").First().AttrOr("src", "N/A")
+	enhancedImageURL := replaceImageProfileQuality(imageURL)
+
+	lat, long, _ := extractLatLong(mapsLink)
+
+	return &models.Place{
+		Title:       title,
+		Address:     address,
+		Rating:      doc.Find(".MW4etd").Text(),
+		ReviewCount: cleanedReviewCount,
+		ImageURL:    enhancedImageURL,
+		MapsLink:    mapsLink,
+		Location: models.GeoLocation{
+			Latitude:  lat,
+			Longitude: long,
+		},
+	}
 }

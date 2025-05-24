@@ -79,3 +79,19 @@ func (h *ScrapController) GetAllScrapePlaces(c *gin.Context) {
 		}
 	}
 }
+
+func (c *ScrapController) ScrapeSinglePlace(ctx *gin.Context) {
+	mapsLink := ctx.Query("mapsLink")
+	if mapsLink == "" {
+		utils.ErrorResponse(ctx, http.StatusBadRequest, "mapsLink query parameter is required")
+		return
+	}
+
+	place, err := c.ScrapService.ScrapeSinglePlace(mapsLink)
+	if err != nil {
+		utils.ErrorResponse(ctx, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	utils.SuccessResponse(ctx, http.StatusOK, "Place scraped successfully", place)
+}

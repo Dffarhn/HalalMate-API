@@ -30,3 +30,8 @@ type MenuList struct {
 	Name  string `json:"name"`
 	Price int64 `json:"price"`
 }
+
+type AIResponsAnalyzeMenu struct {
+	HalalStatus string       `json:"halal_status"` // "halal" or "haram"
+	Menu        []MenuItem   `json:"menu"`
+}

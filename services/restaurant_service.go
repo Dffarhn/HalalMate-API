@@ -74,7 +74,6 @@ func (s *RestaurantService) GetRestaurantByIdAndLocation(ctx context.Context, do
 	return restaurant, nil
 }
 
-
 func (s *RestaurantService) GetRestaurantByID(ctx context.Context, docID string) (map[string]interface{}, error) {
 	doc, err := s.FirestoreClient.Collection("restaurants").Doc(docID).Get(ctx)
 	if err != nil {
@@ -84,12 +83,10 @@ func (s *RestaurantService) GetRestaurantByID(ctx context.Context, docID string)
 	restaurant := make(map[string]interface{})
 	doc.DataTo(&restaurant)
 
-
 	return restaurant, nil
 }
 
-
-func (c *RestaurantService) GetRestaurantsByIDs(ctx context.Context, restaurantIDs []string,latitude, longitude float64) ([]map[string]interface{}, error) {
+func (c *RestaurantService) GetRestaurantsByIDs(ctx context.Context, restaurantIDs []string, latitude, longitude float64) ([]map[string]interface{}, error) {
 	// Firestore `In` query to fetch all restaurants in one go
 	iter := c.FirestoreClient.Collection("restaurants").Where("id", "in", restaurantIDs).Documents(ctx)
 	var restaurants []map[string]interface{}
@@ -112,19 +109,17 @@ func (c *RestaurantService) GetRestaurantsByIDs(ctx context.Context, restaurantI
 		if !ok {
 			return nil, fmt.Errorf("error getting location data")
 		}
-	
+
 		// Calculate distance
 		distance := haversine(latitude, longitude, geoPoint.Latitude, geoPoint.Longitude)
 		restaurant["distance"] = distance
-	
+
 		restaurant["bookmark"] = true
 		restaurants = append(restaurants, restaurant)
 	}
 
 	return restaurants, nil
 }
-
-
 
 // function to save restaurant to firestore
 
@@ -188,6 +183,9 @@ func (s *RestaurantService) SaveRestaurants(ctx context.Context, restaurants []*
 			"reviews":        restaurant.Reviews,
 			"menu":           restaurant.Menu,
 			"review_count":   restaurant.ReviewCount,
+			"status":         "halal",
+			"createdAt":      firestore.ServerTimestamp,
+			"updateAt":       firestore.ServerTimestamp,
 		}
 
 		// Add the set operation to the batch
@@ -202,10 +200,52 @@ func (s *RestaurantService) SaveRestaurants(ctx context.Context, restaurants []*
 	return nil
 }
 
+func (s *RestaurantService) SaveRestaurantsHaram(ctx context.Context, restaurants []*models.Place) error {
+	batch := s.FirestoreClient.Batch()
+
+	for _, restaurant := range restaurants {
+		docRef := s.FirestoreClient.Collection("restaurants").NewDoc()
+
+		geoHash := geohash.Encode(restaurant.Location.Latitude, restaurant.Location.Longitude)
+		cleanedAddress := strings.TrimPrefix(restaurant.Address, "Alamat: ")
+
+		// Convert GeoLocation to Firestore GeoPoint
+		data := map[string]interface{}{
+			"id":             docRef.ID, // Store Firestore document ID
+			"title":          restaurant.Title,
+			"rating":         restaurant.Rating,
+			"address":        cleanedAddress,
+			"location":       &latlng.LatLng{Latitude: restaurant.Location.Latitude, Longitude: restaurant.Location.Longitude},
+			"geohash":        geoHash,
+			"price_range":    restaurant.PriceRange,
+			"category":       restaurant.Category,
+			"opening_status": restaurant.OpeningStatus,
+			"image_url":      restaurant.ImageURL,
+			"maps_link":      restaurant.MapsLink,
+			"menu_link":      restaurant.MenuLink,
+			"reviews":        restaurant.Reviews,
+			"menu":           restaurant.Menu,
+			"review_count":   restaurant.ReviewCount,
+			"status":         "haram",
+			"createdAt":      firestore.ServerTimestamp,
+			"updateAt":       firestore.ServerTimestamp,
+		}
+
+		// Add the set operation to the batch
+		batch.Set(docRef, data)
+	}
+
+	// Commit the batch operation
+	_, err := batch.Commit(ctx)
+	if err != nil {
+		return err
+	}
+	return nil
+}
 
 //function to check if restaurant exists on database by on lat and long
 
-func (s *RestaurantService) CheckRestaurantExists(ctx context.Context, latitude, longitude float64, title string) (bool, error) {
+func (s *RestaurantService) CheckRestaurantExists(ctx context.Context, latitude, longitude float64, title string) (bool, string, error) {
 	// Generate geohash for the given location
 	targetGeoHash := geohash.Encode(latitude, longitude)
 
@@ -220,15 +260,21 @@ func (s *RestaurantService) CheckRestaurantExists(ctx context.Context, latitude,
 		Documents(ctx)
 
 	// Get first document
-	_, err := iter.Next()
+	doc, err := iter.Next()
 	if err == iterator.Done {
-		return false, nil // No document found
+		return false, "", nil // No document found
 	}
 	if err != nil {
-		return false, err // Return error if something goes wrong
+		return false, "", err // Return error if something goes wrong
 	}
 
-	return true, nil // Restaurant exists
+	// Get the status from the document
+	status, ok := doc.Data()["status"].(string)
+	if !ok {
+		return false, "", fmt.Errorf("status field is missing or not a string")
+	}
+
+	return true, status, nil // Return the existence flag, status, and any errors
 }
 
 
@@ -241,6 +287,7 @@ func (s *RestaurantService) GetAllRestaurantByLocation(ctx context.Context, lati
 	iter := s.FirestoreClient.Collection("restaurants").
 		Where("geohash", ">=", geohashPrefix).
 		Where("geohash", "<=", geohashPrefix+"~").
+		Where("status", "==", "halal").
 		Documents(ctx)
 
 	var restaurants []map[string]interface{}
@@ -331,4 +378,3 @@ func (s *RestaurantService) GetBookmarkedRestaurants(ctx context.Context, userID
 
 	return bookmarkedMap, nil
 }
-
