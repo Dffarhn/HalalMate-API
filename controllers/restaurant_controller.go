@@ -43,8 +43,12 @@ func (s *RestaurantController) GetAllRestaurants(c *gin.Context) {
 		return
 	}
 
+	
+
 	restaurants, err := s.RestaurantService.GetAllRestaurantByLocation(c, latitude, longitude, userId.(string))
 	if err != nil {
+		// Log the error for debugging purposes
+		print("Error fetching restaurants: ", err)
 		utils.ErrorResponse(c, http.StatusInternalServerError, "Error fetching restaurants")
 		return
 	}

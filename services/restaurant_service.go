@@ -279,9 +279,14 @@ func (s *RestaurantService) CheckRestaurantExists(ctx context.Context, latitude,
 
 
 func (s *RestaurantService) GetAllRestaurantByLocation(ctx context.Context, latitude, longitude float64, userId string) ([]map[string]interface{}, error) {
+	// Debug: Print input parameters
+	fmt.Printf("GetAllRestaurantByLocation called with latitude=%f, longitude=%f, userId=%s\n", latitude, longitude, userId)
+
 	// Generate geohash for the given location
 	targetGeoHash := geohash.Encode(latitude, longitude)
 	geohashPrefix := targetGeoHash[:5] // 3 km range
+
+	fmt.Printf("Generated geohash: %s, geohashPrefix: %s\n", targetGeoHash, geohashPrefix)
 
 	// Query Firestore using geohash prefix
 	iter := s.FirestoreClient.Collection("restaurants").
@@ -293,12 +298,14 @@ func (s *RestaurantService) GetAllRestaurantByLocation(ctx context.Context, lati
 	var restaurants []map[string]interface{}
 	var restaurantIDs []string
 
+	count := 0
 	for {
 		doc, err := iter.Next()
 		if err == iterator.Done {
 			break
 		}
 		if err != nil {
+			fmt.Printf("Error iterating restaurants: %v\n", err)
 			return nil, utils.NewCustomError(http.StatusInternalServerError, "Failed to get restaurants")
 		}
 
@@ -306,11 +313,13 @@ func (s *RestaurantService) GetAllRestaurantByLocation(ctx context.Context, lati
 		docID := doc.Ref.ID
 		geoPoint, ok := data["location"].(*latlng.LatLng)
 		if !ok {
+			fmt.Printf("Skipping docID=%s: location is not *latlng.LatLng\n", docID)
 			continue
 		}
 
 		// Haversine filter
 		distance := haversine(latitude, longitude, geoPoint.Latitude, geoPoint.Longitude)
+		fmt.Printf("docID=%s, distance=%.2f\n", docID, distance)
 		if distance <= 10.0 {
 			restaurant := make(map[string]interface{})
 			doc.DataTo(&restaurant)
@@ -318,12 +327,15 @@ func (s *RestaurantService) GetAllRestaurantByLocation(ctx context.Context, lati
 
 			restaurants = append(restaurants, restaurant)
 			restaurantIDs = append(restaurantIDs, docID) // Collect restaurant IDs for batch bookmark check
+			count++
 		}
 	}
+	fmt.Printf("Total restaurants within 10km: %d\n", count)
 
 	// 🚀 **Batch check bookmarks in ONE query**
 	bookmarkedMap, err := s.GetBookmarkedRestaurants(ctx, userId, restaurantIDs)
 	if err != nil {
+		fmt.Printf("Error getting bookmarks: %v\n", err)
 		return nil, utils.NewCustomError(http.StatusInternalServerError, "Failed to get bookmarks")
 	}
 
@@ -338,6 +350,7 @@ func (s *RestaurantService) GetAllRestaurantByLocation(ctx context.Context, lati
 		return restaurants[i]["distance"].(float64) < restaurants[j]["distance"].(float64)
 	})
 
+	fmt.Printf("Returning %d restaurants\n", len(restaurants))
 	return restaurants, nil
 }
 

@@ -35,7 +35,7 @@ func NewScrapService(openAIService *OpenAIService) *ScrapService {
 	}
 }
 
-func (s *ScrapService) ScrapePlaces(searchURLs []string, placeChan chan<- models.Place, doneChan chan<- bool) {
+func (s *ScrapService) ScrapePlaces(searchURLs []string, placeChan chan<- models.Place, doneChan chan<- bool, latitude, longitude string) {
 	var wg sync.WaitGroup
 
 	for _, pageURL := range searchURLs {
@@ -44,7 +44,7 @@ func (s *ScrapService) ScrapePlaces(searchURLs []string, placeChan chan<- models
 			defer wg.Done()
 
 			log.Printf("Scraping started for URL: %s\n", pageURL)
-			places := scrapeAllData(pageURL)
+			places := scrapeAllData(pageURL, latitude, longitude)
 
 			var menuWg sync.WaitGroup
 			sem := make(chan struct{}, 5) // Limit to 5 concurrent menu scraping goroutines
@@ -154,7 +154,7 @@ func (s *ScrapService) ScrapePlaces(searchURLs []string, placeChan chan<- models
 	doneChan <- true
 }
 
-func scrapeAllData(pageURL string) []models.Place {
+func scrapeAllData(pageURL string, latitude, longitude string) []models.Place {
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("disable-geolocation", false),
 		chromedp.Flag("use-mock-keychain", true),
@@ -189,9 +189,14 @@ func scrapeAllData(pageURL string) []models.Place {
 		}),
 		// Set dynamic geolocation
 		chromedp.ActionFunc(func(ctx context.Context) error {
+			lat, err1 := strconv.ParseFloat(latitude, 64)
+			long, err2 := strconv.ParseFloat(longitude, 64)
+			if err1 != nil || err2 != nil {
+				return fmt.Errorf("invalid latitude or longitude: %v, %v", err1, err2)
+			}
 			return emulation.SetGeolocationOverride().
-				WithLatitude(3.1127).
-				WithLongitude(101.5501).
+				WithLatitude(lat).
+				WithLongitude(long).
 				WithAccuracy(1).
 				Do(ctx)
 		}),
@@ -299,7 +304,6 @@ func (s *ScrapService) scrapeDataMenu(pageURL string) ([]string, string, error) 
 		log.Printf("❌ Failed to scrape menu from %s: %v\n", pageURL, err)
 		return nil, "", err
 	}
-
 
 	return imageMenuList, addressRestaurant, nil
 }
@@ -493,13 +497,12 @@ func replaceImageProfileQuality(imageURL string) string {
 	return re.ReplaceAllString(imageURL, "s1600-k-no")
 }
 
-// 
+//
 
 type RestaurantStatusResponse struct {
 	Status string `json:"status"`
 	Title  string `json:"title"`
 }
-
 
 func (s *ScrapService) ScrapeSinglePlace(mapsLink string) (*RestaurantStatusResponse, error) {
 	log.Printf("🔍 Scraping single place: %s\n", mapsLink)

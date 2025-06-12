@@ -60,7 +60,7 @@ func (h *ScrapController) GetAllScrapePlaces(c *gin.Context) {
 	doneChan := make(chan bool)
 
 	// Start scraping in a separate goroutine
-	go h.ScrapService.ScrapePlaces([]string{url}, placeChan, doneChan)
+	go h.ScrapService.ScrapePlaces([]string{url}, placeChan, doneChan,latitude, longitude)
 
 	// Stream results via SSE
 	for {
