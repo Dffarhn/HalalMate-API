@@ -11,11 +11,11 @@ func RegisterScraperRoutes(router *gin.RouterGroup, scraperController *controlle
 	scraperGroup := router.Group("/scraper")
 	{
 		// Routes with trailing slash
-		scraperGroup.GET("/", scraperController.GetAllScrapePlaces)
-		scraperGroup.POST("/", scraperController.GetAllScrapePlaces)
+		// scraperGroup.GET("/", scraperController.GetAllScrapePlaces)
+		// scraperGroup.POST("/", scraperController.GetAllScrapePlaces)
 
 		// Routes without trailing slash (to prevent redirects)
-		scraperGroup.GET("", scraperController.GetAllScrapePlaces)
+		// scraperGroup.GET("", scraperController.GetAllScrapePlaces)
 		scraperGroup.POST("", scraperController.GetAllScrapePlaces)
 
 		scraperGroup.POST("/restaurant", scraperController.ScrapeSinglePlace)

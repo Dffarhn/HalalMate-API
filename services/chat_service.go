@@ -53,24 +53,32 @@ func (s *ChatService) StreamRecommendations(
 		return
 	}
 
+	// Limit restaurants to prevent token overflow (keep only closest 10)
+	if len(restaurants) > 10 {
+		restaurants = restaurants[:10]
+		log.Printf("Limited restaurants from %d to 10 to prevent token overflow", len(restaurants))
+	}
+
 	//get history chat before
-
 	rooms, err := s.RoomService.GetRoomByID(ctx, userId, roomId)
-
 	if err != nil {
 		log.Println("Error fetching chats:", err)
 		doneChan <- true
 		return
 	}
 
-	// Format chat history
+	// Format chat history (limit to last 5 messages to reduce tokens)
 	var chatHistory strings.Builder
+	chatCount := 0
+	maxChats := 5
 
-	for _, chat := range rooms.Chats {
+	for i := len(rooms.Chats) - 1; i >= 0 && chatCount < maxChats; i-- {
+		chat := rooms.Chats[i]
 		chatHistory.WriteString(fmt.Sprintf(
 			"**User %s** (%s):\n%s\n\n",
 			chat.UserID, chat.CreatedAt, chat.Chat,
 		))
+		chatCount++
 	}
 
 	// Convert restaurant data to JSON

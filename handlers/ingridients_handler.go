@@ -9,7 +9,7 @@ import (
 func RegisterIngridentsRoutes(router *gin.RouterGroup, ingridentController *controllers.IngridientController) {
 	ingredientsRoutes := router.Group("/ingridients")
 	{
-		ingredientsRoutes.POST("/", ingridentController.CreateIngridient)
-		ingredientsRoutes.GET("/", ingridentController.GetAllIngridient)
+		ingredientsRoutes.POST("", ingridentController.CreateIngridient)
+		ingredientsRoutes.GET("", ingridentController.GetAllIngridient)
 	}
 }

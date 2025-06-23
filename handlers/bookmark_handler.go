@@ -11,7 +11,7 @@ func RegisterBookmarkRoute(router *gin.RouterGroup, bookmarkController *controll
 	bookmarkGroup := router.Group("/bookmark")
 
 	{
-		bookmarkGroup.GET("/", middleware.AuthMiddleware(), bookmarkController.GetAllBookmark)
+		bookmarkGroup.GET("", middleware.AuthMiddleware(), bookmarkController.GetAllBookmark)
 		bookmarkGroup.GET("/:bookmarkID", middleware.AuthMiddleware(), bookmarkController.GetOneBookmark)
 		bookmarkGroup.POST("", middleware.AuthMiddleware(), bookmarkController.CreateBookmark)
 		bookmarkGroup.DELETE("/:bookmarkID", middleware.AuthMiddleware(), bookmarkController.DeleteBookmark)
