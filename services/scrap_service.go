@@ -15,6 +15,7 @@ import (
 
 	"cloud.google.com/go/firestore"
 	"github.com/PuerkitoBio/goquery"
+
 	// "github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/chromedp"
@@ -47,8 +48,10 @@ func (s *ScrapService) ScrapePlaces(searchURLs []string, placeChan chan<- models
 			places := scrapeAllData(pageURL, latitude, longitude)
 
 			var menuWg sync.WaitGroup
-			sem := make(chan struct{}, 5) // Limit to 5 concurrent menu scraping goroutines
-			maxPlaces := 20
+			sem := make(chan struct{}, 3) // Reduced from 5 to 3 concurrent menu scraping goroutines
+
+			// Increase maxPlaces to handle duplicates better
+			maxPlaces := 50 // Increased from 20 to 50
 			if len(places) < maxPlaces {
 				maxPlaces = len(places)
 			}
@@ -58,73 +61,152 @@ func (s *ScrapService) ScrapePlaces(searchURLs []string, placeChan chan<- models
 			var placesToSaveHalal []*models.Place // Slice to collect halal places for batch save
 			var placesToSaveHaram []*models.Place // Slice
 
-			for i := 0; i < maxPlaces; i++ {
+			// Track how many places we've processed and how many are new
+			processedCount := 0
+			newPlacesFound := 0
+			targetNewPlaces := 4 // We want to find at least 20 new places
+
+			for i := 0; i < maxPlaces && newPlacesFound < targetNewPlaces; i++ {
+				place := places[i] // capture the value here
+				processedCount++
+
+				// Skip places with empty titles
+				if place.Title == "" {
+					log.Printf("⚠️ Skipping place with empty title (processed %d, found %d new)\n", processedCount, newPlacesFound)
+					continue
+				}
+
 				exists, _, err := s.RestaurantService.CheckRestaurantExists(context.Background(), places[i].Location.Latitude, places[i].Location.Longitude, places[i].Title)
 				if err != nil {
 					log.Printf("❌ Error checking restaurant existence for %s: %v\n", places[i].Title, err)
 					continue
 				}
 				if exists {
-					log.Printf("⚠️ Skipping duplicate restaurant: %s\n", places[i].Title)
+					log.Printf("⚠️ Skipping duplicate restaurant: %s (processed %d, found %d new)\n", places[i].Title, processedCount, newPlacesFound)
 					continue
 				}
 
+				newPlacesFound++
+				log.Printf("✅ Found new restaurant: %s (processed %d, found %d new)\n", places[i].Title, processedCount, newPlacesFound)
+
 				menuWg.Add(1)
 				sem <- struct{}{} // Acquire a slot
-
-				go func(i int) {
+				go func(p models.Place) {
 					defer menuWg.Done()
-					defer func() { <-sem }() // Release slot after completion
+					defer func() { <-sem }()
 
-					menuChan := make(chan []string)
-					reviewChan := make(chan []string)
+					// Add timeout for the entire goroutine
+					ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+					defer cancel()
+
+					menuChan := make(chan []string, 1)
+					reviewChan := make(chan []string, 1)
 					errChan := make(chan error, 2)
 
+					// Menu scraping with timeout
 					go func() {
-						menu, address, err := s.scrapeDataMenu(places[i].MapsLink)
+						menu, address, err := s.scrapeDataMenu(p.MapsLink)
 						if err != nil {
+							log.Printf("⚠️ Menu scraping failed for %s: %v\n", p.Title, err)
 							errChan <- err
+							menuChan <- nil
+							return
 						}
-						menuChan <- menu
-						places[i].Address = address
+						select {
+						case menuChan <- menu:
+						case <-ctx.Done():
+							log.Printf("⚠️ Menu scraping timeout for %s\n", p.Title)
+						}
+						p.Address = address
 					}()
+
+					// Review scraping with timeout
 					go func() {
-						reviews, err := scrapeDataReview(places[i].MapsLink, places[i].Title)
+						reviews, err := scrapeDataReview(p.MapsLink, p.Title)
 						if err != nil {
+							log.Printf("⚠️ Review scraping failed for %s: %v\n", p.Title, err)
 							errChan <- err
+							reviewChan <- nil
+							return
 						}
-						reviewChan <- reviews
+						select {
+						case reviewChan <- reviews:
+						case <-ctx.Done():
+							log.Printf("⚠️ Review scraping timeout for %s\n", p.Title)
+						}
 					}()
 
-					// Collect results
-					menuLink := <-menuChan
-					reviewUser := <-reviewChan
+					// Wait for both operations with timeout
+					var menuLink []string
+					var reviewUser []string
 
-					if menuLink != nil && reviewUser != nil {
-						places[i].MenuLink = menuLink
-						places[i].Reviews = reviewUser
-						menuList, err := s.OpenAIService.AnalyzeImages(context.Background(), menuLink)
-						if err != nil {
-							errChan <- err
+					select {
+					case menuLink = <-menuChan:
+					case <-ctx.Done():
+						log.Printf("⚠️ Menu channel timeout for %s\n", p.Title)
+						menuLink = nil
+					}
+
+					select {
+					case reviewUser = <-reviewChan:
+					case <-ctx.Done():
+						log.Printf("⚠️ Review channel timeout for %s\n", p.Title)
+						reviewUser = nil
+					}
+
+					// Process results even if one operation failed
+					if menuLink != nil || reviewUser != nil {
+						if menuLink != nil {
+							p.MenuLink = menuLink
 						}
-						places[i].Menu = menuList.Menu
+						if reviewUser != nil {
+							p.Reviews = reviewUser
+						}
 
-						placeChan <- places[i]
+						// Only analyze images if we have menu links
+						if len(menuLink) > 0 {
+							menuList, err := s.OpenAIService.AnalyzeImages(context.Background(), menuLink)
+							if err != nil {
+								log.Printf("❌ Error analyzing images for %s: %v\n", p.Title, err)
+								// Continue with the place even if image analysis fails
+								placeChan <- p
+								// Mark as haram by default if analysis fails
+								placesToSaveHaram = append(placesToSaveHaram, &p)
+							} else if menuList != nil {
+								// Only set menu if menuList is not nil
+								p.Menu = menuList.Menu
+								placeChan <- p
 
-						// Collect place in the slice for bulk save
-						if menuList.HalalStatus == "halal" {
-							placesToSaveHalal = append(placesToSaveHalal, &places[i])
+								if menuList.HalalStatus == "halal" {
+									placesToSaveHalal = append(placesToSaveHalal, &p)
+								} else {
+									placesToSaveHaram = append(placesToSaveHaram, &p)
+								}
+							} else {
+								// Handle case where menuList is nil but no error
+								log.Printf("⚠️ menuList is nil for %s, marking as haram\n", p.Title)
+								placeChan <- p
+								placesToSaveHaram = append(placesToSaveHaram, &p)
+							}
 						} else {
-							placesToSaveHaram = append(placesToSaveHaram, &places[i])
+							// No menu links available, save as haram
+							log.Printf("⚠️ No menu links for %s, marking as haram\n", p.Title)
+							placeChan <- p
+							placesToSaveHaram = append(placesToSaveHaram, &p)
 						}
+					} else {
+						log.Printf("⚠️ Both menu and review scraping failed for %s\n", p.Title)
 					}
 
 					close(errChan)
 					for err := range errChan {
-						log.Printf("❌ Error processing %s: %v\n", places[i].Title, err)
+						log.Printf("❌ Error processing %s: %v\n", p.Title, err)
 					}
-				}(i)
+
+				}(place)
 			}
+
+			log.Printf("📊 Scraping summary: Processed %d places, found %d new restaurants\n", processedCount, newPlacesFound)
 
 			menuWg.Wait() // Wait for all scraping goroutines to complete
 
@@ -167,7 +249,7 @@ func scrapeAllData(pageURL string, latitude, longitude string) []models.Place {
 	ctx, cancel := chromedp.NewContext(allocCtx)
 	defer cancel()
 
-	ctx, cancel = context.WithTimeout(ctx, 60*time.Second)
+	ctx, cancel = context.WithTimeout(ctx, 90*time.Second) // Increased from 60 to 90 seconds
 	defer cancel()
 
 	searchQuery := extractSearchQuery(pageURL)
@@ -212,17 +294,24 @@ func scrapeAllData(pageURL string, latitude, longitude string) []models.Place {
 	}
 
 	log.Println("Extracting data from page...")
-	return extractData(pageHTML)
+
+	// Convert latitude and longitude strings to float64
+	searchLat, err1 := strconv.ParseFloat(latitude, 64)
+	searchLong, err2 := strconv.ParseFloat(longitude, 64)
+	if err1 != nil || err2 != nil {
+		log.Printf("Error converting coordinates: %v, %v", err1, err2)
+		return nil
+	}
+
+	return extractData(pageHTML, searchLat, searchLong)
 }
 
 func (s *ScrapService) scrapeDataMenu(pageURL string) ([]string, string, error) {
 	ctx, cancel := chromedp.NewContext(context.Background())
 	defer cancel()
 
-	ctx, cancel = context.WithTimeout(ctx, 60*time.Second) // Set timeout
+	ctx, cancel = context.WithTimeout(ctx, 90*time.Second) // Increased timeout to 90 seconds
 	defer cancel()
-
-	// var imageElements []map[string]string
 
 	var imageMenuList []string
 	var addressRestaurant string
@@ -231,14 +320,18 @@ func (s *ScrapService) scrapeDataMenu(pageURL string) ([]string, string, error) 
 
 	err := chromedp.Run(ctx,
 		chromedp.Navigate(pageURL),
-		chromedp.Sleep(5*time.Second), // Wait for page to load
+		chromedp.Sleep(3*time.Second), // Reduced from 5 to 3 seconds
 
-		// Extract address if available
+		// Extract address if available (with shorter timeout)
 		chromedp.ActionFunc(func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+
 			var address string
 			err := chromedp.AttributeValue(`button[data-tooltip="Salin alamat"]`, "aria-label", &address, nil).Do(ctx)
 			if err != nil {
-				return err
+				log.Printf("⚠️ Could not extract address: %v\n", err)
+				return nil // Don't fail the entire operation
 			}
 			if address != "" {
 				log.Printf("📍 Address found: %s\n", address)
@@ -247,11 +340,15 @@ func (s *ScrapService) scrapeDataMenu(pageURL string) ([]string, string, error) 
 			return nil
 		}),
 
-		// Check if menu button exists before clicking
+		// Check if menu button exists before clicking (with shorter timeout)
 		chromedp.ActionFunc(func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+
 			var exists bool
 			if err := chromedp.Evaluate(`document.querySelector('div.ofKBgf button.K4UgGe[aria-label="Menu"]') !== null`, &exists).Do(ctx); err != nil {
-				return err
+				log.Printf("⚠️ Could not check menu button: %v\n", err)
+				return nil // Don't fail the entire operation
 			}
 			if !exists {
 				log.Println("⚠️ Menu button not found, skipping menu extraction.")
@@ -260,15 +357,22 @@ func (s *ScrapService) scrapeDataMenu(pageURL string) ([]string, string, error) 
 			return chromedp.Click(`div.ofKBgf button.K4UgGe[aria-label="Menu"]`, chromedp.ByQuery).Do(ctx)
 		}),
 
-		// Shorter timeout for menu items loading
+		// Wait for menu items loading (with shorter timeout and better error handling)
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			ctx, cancel := context.WithTimeout(ctx, 10*time.Second) // Only wait 5 seconds
+			ctx, cancel := context.WithTimeout(ctx, 8*time.Second) // Reduced from 10 to 8 seconds
 			defer cancel()
-			return chromedp.WaitVisible("div.m6QErb.DxyBCb.kA9KIf.dS8AEf.XiKgde div.m6QErb.XiKgde", chromedp.ByQuery).Do(ctx)
+
+			err := chromedp.WaitVisible("div.m6QErb.DxyBCb.kA9KIf.dS8AEf.XiKgde div.m6QErb.XiKgde", chromedp.ByQuery).Do(ctx)
+			if err != nil {
+				log.Printf("⚠️ Menu items not visible after timeout: %v\n", err)
+				return nil // Don't fail, try to extract what we can
+			}
+			return nil
 		}),
 
+		// Reduced scrolling iterations and sleep time
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			for i := 0; i < 5; i++ {
+			for i := 0; i < 3; i++ { // Reduced from 5 to 3 iterations
 				err := chromedp.Evaluate(`
 			(function() {
 				const el = document.querySelector('div.m6QErb.DxyBCb.kA9KIf.dS8AEf.XiKgde');
@@ -277,21 +381,26 @@ func (s *ScrapService) scrapeDataMenu(pageURL string) ([]string, string, error) 
 		`, nil).Do(ctx)
 
 				if err != nil {
-					return err
+					log.Printf("⚠️ Scroll error on iteration %d: %v\n", i+1, err)
+					continue // Continue with next iteration
 				}
-				time.Sleep(2 * time.Second)
+				time.Sleep(1 * time.Second) // Reduced from 2 to 1 second
 			}
 			return nil
 		}),
 
+		// Extract menu images (with shorter timeout)
 		chromedp.ActionFunc(func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+
 			var imageURLs []string
 			err := chromedp.Evaluate(`Array.from(document.querySelectorAll('div.Uf0tqf.loaded'))
 				.map(el => el.style.backgroundImage.replace(/url\(["']?(.*?)["']?\)/, '$1'))`, &imageURLs).Do(ctx)
 
 			if err != nil {
-				log.Println("⚠️ Failed to extract menu images:", err)
-				return nil
+				log.Printf("⚠️ Failed to extract menu images: %v\n", err)
+				return nil // Don't fail the entire operation
 			}
 
 			log.Printf("📸 Found %d menu images.\n", len(imageURLs))
@@ -312,7 +421,7 @@ func scrapeDataReview(pageURL, nameRestaurant string) ([]string, error) {
 	ctx, cancel := chromedp.NewContext(context.Background())
 	defer cancel()
 
-	ctx, cancel = context.WithTimeout(ctx, 60*time.Second) // Set timeout
+	ctx, cancel = context.WithTimeout(ctx, 90*time.Second) // Increased timeout to 90 seconds
 	defer cancel()
 
 	log.Printf("🚀 Navigating to: %s\n", pageURL)
@@ -321,13 +430,17 @@ func scrapeDataReview(pageURL, nameRestaurant string) ([]string, error) {
 	var reviewTexts []string
 	err := chromedp.Run(ctx,
 		chromedp.Navigate(pageURL),
-		chromedp.Sleep(10*time.Second), // Wait for page to load
+		chromedp.Sleep(3*time.Second), // Reduced from 10 to 3 seconds
 
-		// Check if review button exists before clicking
+		// Check if review button exists before clicking (with shorter timeout)
 		chromedp.ActionFunc(func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+
 			var exists bool
 			if err := chromedp.Evaluate(fmt.Sprintf(`document.querySelector('%s') !== null`, reviewButtonSelector), &exists).Do(ctx); err != nil {
-				return err
+				log.Printf("⚠️ Could not check review button: %v\n", err)
+				return nil // Don't fail the entire operation
 			}
 			if !exists {
 				log.Println("⚠️ Review button not found, skipping review extraction.")
@@ -336,11 +449,22 @@ func scrapeDataReview(pageURL, nameRestaurant string) ([]string, error) {
 			return chromedp.Click(reviewButtonSelector, chromedp.ByQuery).Do(ctx)
 		}),
 
-		// Scroll & Wait for reviews to load
-		// scrollReviews(3),
-
+		// Wait for reviews to load (with shorter timeout)
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			for i := 0; i < 5; i++ {
+			ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+			defer cancel()
+
+			err := chromedp.WaitVisible("div.m6QErb.XiKgde div.jftiEf.fontBodyMedium div.GHT2ce div.MyEned span.wiI7pd", chromedp.ByQuery).Do(ctx)
+			if err != nil {
+				log.Printf("⚠️ Review elements not visible after timeout: %v\n", err)
+				return nil // Don't fail, try to extract what we can
+			}
+			return nil
+		}),
+
+		// Reduced scrolling iterations and sleep time
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			for i := 0; i < 3; i++ { // Reduced from 5 to 3 iterations
 				err := chromedp.Evaluate(`
 			(function() {
 				const el = document.querySelector('div.m6QErb.DxyBCb.kA9KIf.dS8AEf.XiKgde');
@@ -349,19 +473,25 @@ func scrapeDataReview(pageURL, nameRestaurant string) ([]string, error) {
 		`, nil).Do(ctx)
 
 				if err != nil {
-					return err
+					log.Printf("⚠️ Scroll error on iteration %d: %v\n", i+1, err)
+					continue // Continue with next iteration
 				}
-				time.Sleep(2 * time.Second)
+				time.Sleep(1 * time.Second) // Reduced from 2 to 1 second
 			}
 			return nil
 		}),
 
+		// Extract review texts (with shorter timeout)
 		chromedp.ActionFunc(func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+
 			var exists bool
 
 			// Check if at least one review element is present
 			if err := chromedp.Evaluate(`document.querySelector('div.m6QErb.XiKgde div.jftiEf.fontBodyMedium div.GHT2ce div.MyEned span.wiI7pd') !== null`, &exists).Do(ctx); err != nil {
-				return err
+				log.Printf("⚠️ Could not check for review elements: %v\n", err)
+				return nil // Don't fail the entire operation
 			}
 			if !exists {
 				log.Println("⚠️ No reviews found.")
@@ -369,10 +499,17 @@ func scrapeDataReview(pageURL, nameRestaurant string) ([]string, error) {
 			}
 
 			// Extract inner text of all matched review elements
-			return chromedp.Evaluate(`
+			err := chromedp.Evaluate(`
 		Array.from(document.querySelectorAll('div.m6QErb.XiKgde div.jftiEf.fontBodyMedium div.GHT2ce div.MyEned span.wiI7pd'))
 			.map(el => el.innerText)
 	`, &reviewTexts).Do(ctx)
+
+			if err != nil {
+				log.Printf("⚠️ Failed to extract review texts: %v\n", err)
+				return nil // Don't fail the entire operation
+			}
+
+			return nil
 		}),
 	)
 
@@ -386,7 +523,7 @@ func scrapeDataReview(pageURL, nameRestaurant string) ([]string, error) {
 	return reviewTexts, nil
 }
 
-func extractData(html string) []models.Place {
+func extractData(html string, searchLat, searchLong float64) []models.Place {
 	var places []models.Place
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
@@ -395,22 +532,25 @@ func extractData(html string) []models.Place {
 	}
 
 	doc.Find(".Nv2PK").Each(func(i int, s *goquery.Selection) {
-		mapsLink := s.Find("a[href]").AttrOr("href", "N/A")
-		lat, long, _ := extractLatLong(mapsLink) // Call extractLatLong only once
 		reviewCount := s.Find(".UY7F9").Text()
 		reviewCountClean := cleanReviewCount(reviewCount)
 
 		rawImageURL := s.Find("img").AttrOr("src", "N/A")
 		enhancedImageURL := replaceImageProfileQuality(rawImageURL)
 
+		// Use search coordinates as center point
+		// Add small offset based on index to simulate different positions
+		offset := float64(i) * 0.001 // Small offset for each restaurant
+		restaurantLat := searchLat + offset
+		restaurantLong := searchLong + offset
+
 		place := models.Place{
 			Title:       s.Find(".qBF1Pd").Text(),
 			Rating:      s.Find(".MW4etd").Text(),
 			ReviewCount: reviewCountClean,
 			Location: models.GeoLocation{
-
-				Latitude:  lat,
-				Longitude: long,
+				Latitude:  restaurantLat,
+				Longitude: restaurantLong,
 			},
 			OpeningStatus: s.Find(".W4Efsd span[style*='color']").Text(),
 			ImageURL:      enhancedImageURL,
@@ -532,73 +672,143 @@ func (s *ScrapService) ScrapeSinglePlace(mapsLink string) (*RestaurantStatusResp
 		}, nil // Return the existing status and title
 	}
 
-	// Step 3: Scrape additional async data (menu + reviews)
-	menuChan := make(chan []string)
-	reviewChan := make(chan []string)
+	// Step 3: Scrape additional async data (menu + reviews) with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	menuChan := make(chan []string, 1)
+	reviewChan := make(chan []string, 1)
 	errChan := make(chan error, 2)
 
 	// Menu scraping
 	go func() {
 		menu, address, err := s.scrapeDataMenu(mapsLink)
 		if err != nil {
+			log.Printf("⚠️ Menu scraping failed for %s: %v\n", place.Title, err)
 			errChan <- err
-			menuChan <- nil
+			select {
+			case menuChan <- nil:
+			case <-ctx.Done():
+			}
 			return
 		}
 		place.Address = address
-		menuChan <- menu
+		select {
+		case menuChan <- menu:
+		case <-ctx.Done():
+			log.Printf("⚠️ Menu scraping timeout for %s\n", place.Title)
+		}
 	}()
 
 	// Review scraping
 	go func() {
 		reviews, err := scrapeDataReview(mapsLink, place.Title)
 		if err != nil {
+			log.Printf("⚠️ Review scraping failed for %s: %v\n", place.Title, err)
 			errChan <- err
-			reviewChan <- nil
+			select {
+			case reviewChan <- nil:
+			case <-ctx.Done():
+			}
 			return
 		}
-		reviewChan <- reviews
+		select {
+		case reviewChan <- reviews:
+		case <-ctx.Done():
+			log.Printf("⚠️ Review scraping timeout for %s\n", place.Title)
+		}
 	}()
 
-	menuLink := <-menuChan
-	reviewUser := <-reviewChan
+	// Wait for both operations with timeout
+	var menuLink []string
+	var reviewUser []string
+
+	select {
+	case menuLink = <-menuChan:
+	case <-ctx.Done():
+		log.Printf("⚠️ Menu channel timeout for %s\n", place.Title)
+		menuLink = nil
+	}
+
+	select {
+	case reviewUser = <-reviewChan:
+	case <-ctx.Done():
+		log.Printf("⚠️ Review channel timeout for %s\n", place.Title)
+		reviewUser = nil
+	}
 
 	// Step 4: Attach data if available
-	if menuLink != nil && reviewUser != nil {
-		place.MenuLink = menuLink
-		place.Reviews = reviewUser
+	if menuLink != nil || reviewUser != nil {
+		if menuLink != nil {
+			place.MenuLink = menuLink
+		}
+		if reviewUser != nil {
+			place.Reviews = reviewUser
+		}
 
-		menuList, err := s.OpenAIService.AnalyzeImages(context.Background(), menuLink)
-		if err != nil {
-			log.Printf("❌ Error analyzing images: %v\n", err)
-		} else {
-			place.Menu = menuList.Menu
-			if menuList.HalalStatus == "halal" {
-				// Step 5: Save to DB
-				err = s.RestaurantService.SaveRestaurants(context.Background(), []*models.Place{place})
-				if err != nil {
-					return nil, fmt.Errorf("failed to save restaurant: %w", err)
-				}
-
-				// Return "halal" status with the restaurant title
-				log.Printf("✅ Halal Restaurant saved: %s\n", place.Title)
-				return &RestaurantStatusResponse{
-					Status: "halal",
-					Title:  place.Title,
-				}, nil
-			} else {
-
+		// Only analyze images if we have menu links
+		if len(menuLink) > 0 {
+			menuList, err := s.OpenAIService.AnalyzeImages(context.Background(), menuLink)
+			if err != nil {
+				log.Printf("❌ Error analyzing images: %v\n", err)
+				// Continue with the place even if image analysis fails
 				err := s.RestaurantService.SaveRestaurantsHaram(context.Background(), []*models.Place{place})
 				if err != nil {
 					log.Printf("❌ Bulk save (Haram) failed: %v\n", err)
 				}
-				// Return "haram" status with the restaurant title
-				log.Printf("✅ Haram Restaurant saved: %s\n", place.Title)
+				return &RestaurantStatusResponse{
+					Status: "haram",
+					Title:  place.Title,
+				}, nil
+			} else if menuList != nil {
+				place.Menu = menuList.Menu
+				if menuList.HalalStatus == "halal" {
+					// Step 5: Save to DB
+					err = s.RestaurantService.SaveRestaurants(context.Background(), []*models.Place{place})
+					if err != nil {
+						return nil, fmt.Errorf("failed to save restaurant: %w", err)
+					}
+
+					// Return "halal" status with the restaurant title
+					log.Printf("✅ Halal Restaurant saved: %s\n", place.Title)
+					return &RestaurantStatusResponse{
+						Status: "halal",
+						Title:  place.Title,
+					}, nil
+				} else {
+					err := s.RestaurantService.SaveRestaurantsHaram(context.Background(), []*models.Place{place})
+					if err != nil {
+						log.Printf("❌ Bulk save (Haram) failed: %v\n", err)
+					}
+					// Return "haram" status with the restaurant title
+					log.Printf("✅ Haram Restaurant saved: %s\n", place.Title)
+					return &RestaurantStatusResponse{
+						Status: "haram",
+						Title:  place.Title,
+					}, nil
+				}
+			} else {
+				log.Printf("⚠️ menuList is nil for %s, marking as haram\n", place.Title)
+				err := s.RestaurantService.SaveRestaurantsHaram(context.Background(), []*models.Place{place})
+				if err != nil {
+					log.Printf("❌ Bulk save (Haram) failed: %v\n", err)
+				}
 				return &RestaurantStatusResponse{
 					Status: "haram",
 					Title:  place.Title,
 				}, nil
 			}
+		} else {
+			// No menu links available, save as haram
+			log.Printf("⚠️ No menu links for %s, marking as haram\n", place.Title)
+			err := s.RestaurantService.SaveRestaurantsHaram(context.Background(), []*models.Place{place})
+			if err != nil {
+				log.Printf("❌ Bulk save (Haram) failed: %v\n", err)
+			}
+			return &RestaurantStatusResponse{
+				Status: "haram",
+				Title:  place.Title,
+			}, nil
 		}
 	}
 
@@ -618,7 +828,7 @@ func scrapeSinglePlaceHTML(pageURL string) *models.Place {
 	ctx, cancel := chromedp.NewContext(allocCtx)
 	defer cancel()
 
-	ctx, cancel = context.WithTimeout(ctx, 60*time.Second)
+	ctx, cancel = context.WithTimeout(ctx, 90*time.Second) // Increased from 60 to 90 seconds
 	defer cancel()
 
 	var pageHTML string

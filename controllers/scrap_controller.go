@@ -49,10 +49,12 @@ func (h *ScrapController) GetAllScrapePlaces(c *gin.Context) {
 
 	log.Println("Scraping URL:", url)
 
-	// Set response headers for SSE
-	c.Writer.Header().Set("Content-Type", "text/event-stream")
-	c.Writer.Header().Set("Cache-Control", "no-cache")
-	c.Writer.Header().Set("Connection", "keep-alive")
+	// Set SSE headers ONCE and FIRST (before any writing)
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	// Remove manual CORS headers - your middleware handles this
+
 	c.Writer.Flush()
 
 	// Create channels to stream results
@@ -60,7 +62,7 @@ func (h *ScrapController) GetAllScrapePlaces(c *gin.Context) {
 	doneChan := make(chan bool)
 
 	// Start scraping in a separate goroutine
-	go h.ScrapService.ScrapePlaces([]string{url}, placeChan, doneChan,latitude, longitude)
+	go h.ScrapService.ScrapePlaces([]string{url}, placeChan, doneChan, latitude, longitude)
 
 	// Stream results via SSE
 	for {
